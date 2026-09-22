@@ -49,6 +49,7 @@ details[open] summary:after{content:"−"}
 .ast-help{margin:0 0 10px;padding:9px 10px;border-radius:10px;background:#eef7f4;color:#3f6358;font-size:11px;line-height:1.45}
 .check-label{display:flex;align-items:flex-start;gap:9px;font-weight:650;cursor:pointer;padding:7px 0;margin:0;color:#3c4a5b;font-size:12px;line-height:1.35}
 .check-label input{width:16px;height:16px;padding:0;margin:1px 0 0;flex:0 0 auto;accent-color:var(--green)}
+.tabs{display:flex;gap:8px;margin:0 0 14px}.tab{flex:1;border:1px solid var(--line);background:#fff;color:var(--navy);padding:11px 12px;border-radius:10px;font-weight:750;cursor:pointer}.tab.active{background:var(--navy);color:#fff}.compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.compare-card{border:1px solid var(--line);border-radius:12px;padding:14px;background:#fbfdff}.compare-card h3{margin:0 0 12px;color:var(--navy);font-size:15px}.difference{margin-top:14px;padding:16px;border-radius:12px;background:#eef7f4;display:flex;justify-content:space-between;align-items:center}.difference b{font-size:19px;color:var(--green)}
 .result{display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid #edf1f5;font-size:13px}.result span{color:#526277}.result b{color:#1c2d40}.total{font-size:15px;font-weight:800;padding-top:14px}.total span{color:var(--navy);font-weight:800}.total b{color:var(--green);font-size:17px}
 #nonCore{margin-top:16px!important}
 .tipp-extra{padding:13px 14px 14px;color:#3d4c5d;font-size:12px;line-height:1.5}
@@ -56,13 +57,15 @@ details[open] summary:after{content:"−"}
 .tipp-extra hr{border:0;border-top:1px solid #e8edf3;margin:10px 0}
 .tipp-validity{color:var(--muted);font-size:11px;line-height:1.5;margin-bottom:8px}
 #status{min-height:18px}
-@media(max-width:620px){.rates{grid-template-columns:1fr 1fr}.wrap{padding:14px 12px 34px}.hero h1{font-size:24px}.card{padding:17px}}
+@media(max-width:620px){.compare-grid{grid-template-columns:1fr}.tabs{flex-direction:column}.rates{grid-template-columns:1fr 1fr}.wrap{padding:14px 12px 34px}.hero h1{font-size:24px}.card{padding:17px}}
 @media(max-width:430px){.grid,.rates{grid-template-columns:1fr 1fr}.grid{gap:9px}.rates{gap:8px}.rate{padding:10px}.rate input{font-size:15px}.hero{padding:22px 18px}}
 @media(max-width:350px){.grid,.rates{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 <div class="wrap">
+<div class="tabs"><button id="tabNormal" class="tab active" onclick="switchTab('normal')">Duty Calculator</button><button id="tabDiff" class="tab" onclick="switchTab('difference')">Duty Difference Calculator</button></div>
+<div id="normalView">
 <div class="card hero">
 <h1>Pakistan Customs Duty Calculator</h1>
 <div class="sub">Online TIPP tariff lookup • FY 2026–27</div>
@@ -105,6 +108,35 @@ details[open] summary:after{content:"−"}
 <div class="card">
 <div class="section-head"><h2>Duty & Tax Breakdown</h2><button id="gstToggle" class="gst-toggle" type="button" onclick="toggleGST()">Use GST</button></div>
 <div id="breakdown"><small>Enter values and fetch tariff rates.</small></div>
+</div>
+</div>
+
+</div>
+
+<div id="differenceView" style="display:none">
+<div class="card">
+<div class="section-head"><h2>Duty Difference Calculator</h2><span class="section-note">Side-by-side comparison</span></div>
+<div class="compare-grid">
+<div class="compare-card">
+<h3>Left Side</h3>
+<div class="grid">
+<div><label>Quantity</label><input id="lqty" type="number" step="any" value="1" oninput="calcDifference()"></div>
+<div><label>Unit Price</label><input id="lprice" type="number" step="any" value="0" oninput="calcDifference()"></div>
+<div><label>Exchange Rate</label><input id="lfx" type="number" step="any" value="280" oninput="calcDifference()"></div>
+</div>
+<div id="leftBreakdown"></div>
+</div>
+<div class="compare-card">
+<h3>Right Side</h3>
+<div class="grid">
+<div><label>Quantity</label><input id="rqty" type="number" step="any" value="1" oninput="calcDifference()"></div>
+<div><label>Unit Price</label><input id="rprice" type="number" step="any" value="0" oninput="calcDifference()"></div>
+<div><label>Exchange Rate</label><input id="rfx" type="number" step="any" value="280" oninput="calcDifference()"></div>
+</div>
+<div id="rightBreakdown"></div>
+</div>
+</div>
+<div class="difference"><span>Difference in Total Duties &amp; Taxes (Right − Left)</span><b id="differenceValue">Rs. 0.00</b></div>
 </div>
 </div>
 
@@ -246,6 +278,40 @@ function toggleGST(){
  if(b){b.textContent=gstMode?'GST Applied':'Use GST';b.classList.toggle('active',gstMode);}
  calc();
 }
+function switchTab(tab){
+ const normal=tab==='normal';
+ document.getElementById('normalView').style.display=normal?'block':'none';
+ document.getElementById('differenceView').style.display=normal?'none':'block';
+ document.getElementById('tabNormal').classList.toggle('active',normal);
+ document.getElementById('tabDiff').classList.toggle('active',!normal);
+ if(!normal) calcDifference();
+}
+function sideCalculation(prefix){
+ const q=Number(document.getElementById(prefix+'qty').value||0);
+ const p=Number(document.getElementById(prefix+'price').value||0);
+ const fx=Number(document.getElementById(prefix+'fx').value||0);
+ const cv=q*p*fx;
+ const cd=cv*rates.cd, acd=cv*rates.acd, rd=cv*rates.rd;
+ const st=(cv+cd+acd+rd)*rates.st;
+ const ast=gstMode?0:(cv+cd+acd+rd)*rates.ast;
+ const gst=gstMode?st*0.39:0;
+ const itBase=cv+cd+acd+rd+st+(gstMode?gst:ast);
+ const it=itBase*rates.it;
+ const total=cd+acd+rd+st+ast+gst+it;
+ return {cv,cd,acd,rd,st,ast,gst,it,total,incidence:cv>0?(total/cv)*100:0};
+}
+function renderSide(id,d){
+ const rows=[['Customs Value (CV)',d.cv],['CD',d.cd],['ACD',d.acd],['RD',d.rd],['ST',d.st],['AST',d.ast],...(gstMode?[['GST',d.gst]]:[]),['IT',d.it],['Total Duties & Taxes',d.total]];
+ let html='<div class="result"><span>Customs Value (CV)</span><b>'+money(d.cv)+'</b></div>';
+ html+='<div class="result"><span>Total Incidence</span><b>'+d.incidence.toFixed(4)+'%</b></div>';
+ html+=rows.slice(1).map((r,i)=>'<div class="result '+((i+1)>=7?'total':'')+'"><span>'+r[0]+'</span><b>'+money(r[1])+'</b></div>').join('');
+ document.getElementById(id).innerHTML=html;
+}
+function calcDifference(){
+ const l=sideCalculation('l'), r=sideCalculation('r');
+ renderSide('leftBreakdown',l); renderSide('rightBreakdown',r);
+ document.getElementById('differenceValue').textContent='Rs. '+money(r.total-l.total);
+}
 function calc(){
  const q=Number(document.getElementById('qty').value||0);
  const p=Number(document.getElementById('price').value||0);
@@ -266,6 +332,7 @@ function calc(){
  html+='<div class="result"><span>Total Incidence</span><b>'+incidence.toFixed(4)+'%</b></div>';
  html+=rows.slice(1).map((r,i)=>'<div class="result '+((i+1)>=7?'total':'')+'"><span>'+r[0]+'</span><b>'+money(r[1])+'</b></div>').join('');
  document.getElementById('breakdown').innerHTML=html;
+ if(document.getElementById('differenceView').style.display!=='none') calcDifference();
 }
 </script>
 
