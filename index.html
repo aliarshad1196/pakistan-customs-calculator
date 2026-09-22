@@ -34,6 +34,7 @@ small{color:#667085}
 <div id="commodity"></div>
 <div class="status" style="margin-top:12px">TIPP rates are loaded automatically, but you can edit any rate manually.</div>
 <div id="rates" class="rates"></div>
+<div id="astInfo" class="status" style="margin-top:10px"></div>
 <div id="options" style="margin-top:14px;display:none">
 <label style="display:flex;align-items:center;gap:9px;font-weight:700;cursor:pointer"><input id="fta" type="checkbox" style="width:auto" onchange="applyOptions()"> Apply Pak-China FTA (CD) rate</label>
 <div id="ftaInfo" class="status"></div>
@@ -62,6 +63,7 @@ small{color:#667085}
 const rates={cd:0,acd:0,rd:0,st:0,ast:0,it:0};
 const tippRates={cd:0,acd:0,rd:0,st:0,ast:0,it:0};
 let specialRates={pak_china_fta_cd:null,income_tax_exemption_first_schedule_ii:null};
+let astSource={rate:0.03,name:'Twelfth Schedule — minimum value addition tax',note:'3% ad valorem on imported taxable goods, subject to statutory exclusions.'};
 const money=n=>Number(n||0).toLocaleString('en-PK',{maximumFractionDigits:2});
 function pct(x){return (Number(x||0)*100).toFixed(2)+'%'}
 function cleanHS(v){return String(v).replace(/[^0-9]/g,'')}
@@ -77,14 +79,17 @@ async function fetchTariff(){
    rates.cd=Number(d.rates.cd||0); rates.acd=Number(d.rates.acd||0);
    rates.rd=Number(d.rates.rd||0); rates.st=Number(d.rates.st||0);
    rates.ast=Number(d.rates.ast||0); rates.it=Number(d.rates.it||0);
+   astSource=d.ast_source||astSource;
    Object.assign(tippRates,rates);
    specialRates.pak_china_fta_cd=d.special_rates?.pak_china_fta_cd ?? null;
    specialRates.income_tax_exemption_first_schedule_ii=d.special_rates?.income_tax_exemption_first_schedule_ii ?? null;
    document.getElementById('commodity').innerHTML='<p><b>'+ (d.code||hs) +'</b> — '+(d.description||'')+'</p>';
    document.getElementById('rates').innerHTML=
     [['CD','cd'],['ACD','acd'],['RD','rd'],['ST','st'],['AST','ast'],['IT','it']]
-    .map(x=>'<div class="rate"><b>'+x[0]+' Rate (%)</b><input id="rate_'+x[1]+'" type="number" min="0" step="0.01" value="'+(Number(rates[x[1]])*100)+'" oninput="syncManualRate(\''+x[1]+'\')"><small>Editable • TIPP: '+pct(rates[x[1]])+'</small></div>').join('');
+    .map(x=>'<div class="rate"><b>'+x[0]+' Rate (%)</b><input id="rate_'+x[1]+'" type="number" min="0" step="0.01" value="'+(Number(rates[x[1]])*100)+'" oninput="syncManualRate(\''+x[1]+'\')"><small>'+ (x[1]==='ast' ? 'Editable • Twelfth Schedule: '+pct(rates[x[1]]) : 'Editable • TIPP: '+pct(rates[x[1]])) +'</small></div>').join('');
    document.getElementById('options').style.display='block';
+   const astNote=document.getElementById('astInfo');
+   if(astNote) astNote.textContent='Automatic AST source: '+astSource.name+' — '+astSource.note;
    const ftaBox=document.getElementById('fta');
    const itBox=document.getElementById('itExemption');
    ftaBox.disabled=specialRates.pak_china_fta_cd===null;

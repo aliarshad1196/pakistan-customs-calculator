@@ -238,6 +238,18 @@ def parse_tariff_page(html):
     return rates, non_core, list(dict.fromkeys(validity)), special_rates, special_details
 
 
+def twelfth_schedule_ast_rate(hs8):
+    """Return the statutory minimum value-addition tax rate under the
+    Twelfth Schedule to the Sales Tax Act, 1990.
+
+    The Schedule provides a 3% ad-valorem rate on imported taxable goods,
+    subject to its exclusions. Some exclusions depend on importer/use facts
+    that an HS code alone cannot establish, so the calculator applies the
+    statutory default and keeps AST editable for those cases.
+    """
+    return 0.03
+
+
 def lookup(hs):
     hs8, tipp_code = normalize_hs(hs)
 
@@ -263,6 +275,12 @@ def lookup(hs):
 
     soup = BeautifulSoup(response.text, "html.parser")
     rates, non_core, validity, special_rates, special_details = parse_tariff_page(response.text)
+    # TIPP often does not expose the import-stage minimum value-addition tax
+    # (shown by WeBOC as Additional Sales Tax / AST). The Twelfth Schedule to
+    # the Sales Tax Act, 1990 provides a 3% ad-valorem rate, subject to its
+    # exclusions. Apply that statutory default here; the UI keeps it editable.
+    ast_rate = twelfth_schedule_ast_rate(hs8)
+    rates["ast"] = ast_rate
     description = extract_commodity_info(soup, tipp_code)
 
     return {
@@ -271,6 +289,11 @@ def lookup(hs):
         "record_id": str(record_id),
         "description": description,
         "rates": rates,
+        "ast_source": {
+            "rate": ast_rate,
+            "name": "Twelfth Schedule — minimum value addition tax",
+            "note": "3% ad valorem on imported taxable goods, subject to statutory exclusions."
+        },
         "non_core": non_core,
         "special_rates": special_rates,
         "special_details": special_details,
