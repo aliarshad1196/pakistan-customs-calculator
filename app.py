@@ -221,49 +221,52 @@ def table_headers(table):
     return [clean_text(c.get_text(" ", strip=True)).lower() for c in header_row.find_all(["th", "td"])]
 
 
-def _download_cpfta_text(session):
-    """Download/cache the official CPFTA tariff schedule using PyMuPDF.
+def _find_cpfta_row_text(hs8, session):
+    """Download the official CPFTA PDF and scan pages only until hs8 is found.
 
-    PyMuPDF is used instead of pypdf because the FBR CPFTA PDF contains a
-    content stream that can make pypdf extraction take longer than Render's
-    default Gunicorn timeout.
+    The previous implementation extracted text from every page before looking
+    for the requested PCT.  On Render that can be unnecessarily expensive.
+    PyMuPDF lets us inspect one page at a time and stop as soon as the code is
+    found.
     """
-    if os.path.exists(CPFTA_TEXT_CACHE):
-        try:
-            return Path(CPFTA_TEXT_CACHE).read_text(encoding="utf-8")
-        except Exception:
-            pass
+    code = re.sub(r"[^0-9]", "", hs8)[:8]
+    if len(code) != 8:
+        return None
 
     if not os.path.exists(CPFTA_CACHE):
-        r = session.get(CPFTA_SRO_URL, timeout=(15, 75), verify=False)
+        r = session.get(CPFTA_SRO_URL, timeout=(20, 120), verify=False)
         r.raise_for_status()
         with open(CPFTA_CACHE, "wb") as f:
             f.write(r.content)
 
-    parts = []
+    needle = re.compile(r"PCT\s+Code\s+" + re.escape(code) + r"\b", re.I)
     with fitz.open(CPFTA_CACHE) as doc:
         for page in doc:
             try:
-                parts.append(page.get_text("text") or "")
+                text = page.get_text("text") or ""
             except Exception:
                 continue
-
-    text = re.sub(r"\s+", " ", " ".join(parts)).strip()
-    if not text:
-        raise RuntimeError("FBR CPFTA PDF was downloaded but no text could be extracted.")
-    try:
-        Path(CPFTA_TEXT_CACHE).write_text(text, encoding="utf-8")
-    except Exception:
-        pass
-    return text
+            if needle.search(text):
+                # Include adjacent pages because a table row can be split by a
+                # PDF page boundary.
+                page_no = page.number
+                chunks = []
+                for n in range(max(0, page_no - 1), min(len(doc), page_no + 2)):
+                    try:
+                        chunks.append(doc[n].get_text("text") or "")
+                    except Exception:
+                        pass
+                return re.sub(r"\s+", " ", " ".join(chunks)).strip()
+    return None
 
 
 def cpfta_current_rate(hs8, session):
     """Return the current CPFTA preferential CD rate for an 8-digit PCT.
 
     SRO 1640(I)/2019 contains a 15-year phase-down beginning 1-Jan-2020.
-    Year 7 therefore applies during calendar year 2026.  The function parses
-    the official FBR schedule rather than using stale TIPP concession rows.
+    Year 7 therefore applies during calendar year 2026.  The function reads
+    the official FBR schedule for the requested PCT rather than using stale
+    TIPP concession rows.
     """
     code = re.sub(r"[^0-9]", "", hs8)[:8]
     if len(code) != 8:
@@ -274,32 +277,35 @@ def cpfta_current_rate(hs8, session):
     year_no = today.year - 2020 + 1
     if year_no < 1 or year_no > 15:
         return None, None
-    text = _download_cpfta_text(session)
-    marker = re.search(r"PCT Code\s+" + re.escape(code) + r"\b", text, flags=re.I)
+
+    text = _find_cpfta_row_text(code, session)
+    if not text:
+        return None, None
+
+    marker = re.search(r"PCT\s+Code\s+" + re.escape(code) + r"\b", text, flags=re.I)
     if not marker:
         return None, None
     start = marker.start()
-    nxt = re.search(r"\bPCT Code\s+\d{8}\b", text[marker.end():], flags=re.I)
-    end = marker.end() + nxt.start() if nxt else min(len(text), marker.end() + 1800)
+    nxt = re.search(r"\bPCT\s+Code\s+\d{8}\b", text[marker.end():], flags=re.I)
+    end = marker.end() + nxt.start() if nxt else min(len(text), marker.end() + 2200)
     row = text[start:end]
+
     vals = re.findall(r"Year\s+(\d{1,2})\s+([^ ]+)", row, flags=re.I)
     table = {int(n): v for n, v in vals if int(n) <= 15}
     raw = table.get(year_no)
     if raw is None:
-        # Some PDF extraction layouts omit the repeated 'Year N' labels.
-        # Fall back to the ordered values following Year 1.
         m = re.search(r"Year\s+1\s+", row, flags=re.I)
         if m:
             tail = row[m.end():]
-            tokens = re.split(r"\s+", tail)
             candidates = []
-            for tok in tokens:
+            for tok in re.split(r"\s+", tail):
                 if re.fullmatch(r"(?:\d+(?:\.\d+)?|no)", tok, flags=re.I):
                     candidates.append(tok)
                     if len(candidates) >= 15:
                         break
             if len(candidates) >= year_no:
                 raw = candidates[year_no - 1]
+
     if raw is None:
         return None, None
     if raw.lower() in {"no", "exemption", "exempt", "n/a"}:
