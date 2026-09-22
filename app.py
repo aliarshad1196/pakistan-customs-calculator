@@ -1,181 +1,101 @@
-from flask import Flask, request, jsonify, send_from_directory
-import re, requests, urllib3
-from bs4 import BeautifulSoup
-from urllib.parse import quote
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pakistan Customs Duty Calculator</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:#f4f7fb;color:#172033}
+.wrap{max-width:620px;margin:auto;padding:18px}
+.card{background:#fff;border-radius:18px;padding:20px;margin-bottom:14px;box-shadow:0 5px 20px #00000010}
+h1{font-size:24px;margin:0 0 5px}.sub{color:#667085;font-size:13px;margin-bottom:18px}
+label{display:block;font-weight:700;font-size:13px;margin:12px 0 6px}
+input{width:100%;padding:13px;border:1px solid #d0d5dd;border-radius:10px;font-size:16px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+button{width:100%;border:0;border-radius:11px;padding:14px;font-size:16px;font-weight:700;cursor:pointer;background:#175cd3;color:white;margin-top:12px}
+button.secondary{background:#eef4ff;color:#175cd3}
+.status{font-size:13px;margin-top:10px;color:#667085}
+.rates{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:12px}
+.rate{background:#f8fafc;padding:11px;border-radius:10px}.rate b{display:block;font-size:12px;color:#667085}.rate span{font-size:18px;font-weight:700}
+.result{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #eee}.total{font-size:19px;font-weight:800}
+small{color:#667085}
+@media(max-width:430px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="card">
+<h1>Pakistan Customs Duty Calculator</h1>
+<div class="sub">Online TIPP tariff lookup • FY 2026–27</div>
+<label>HS / PCT Code</label>
+<input id="hs" inputmode="numeric" placeholder="e.g. 9503.0090">
+<button onclick="fetchTariff()">Fetch TIPP Rates</button>
+<div id="status" class="status"></div>
+<div id="commodity"></div>
+<div id="rates" class="rates"></div>
+</div>
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+<div class="card">
+<h2>Import Details</h2>
+<div class="grid">
+<div><label>Quantity</label><input id="qty" type="number" step="any" value="1" oninput="calc()"></div>
+<div><label>Unit Price</label><input id="price" type="number" step="any" value="0" oninput="calc()"></div>
+<div><label>Exchange Rate</label><input id="fx" type="number" step="any" value="280" oninput="calc()"></div>
+</div>
+<button class="secondary" onclick="calc()">Calculate</button>
+</div>
 
-app=Flask(__name__, static_folder='.')
+<div class="card">
+<h2>Duty & Tax Breakdown</h2>
+<div id="breakdown"><small>Enter values and fetch tariff rates.</small></div>
+</div>
+</div>
 
-TIPP_SEARCH="https://www.tipp.gov.pk/index.php?r=tradeInfo/index"
+<script>
+const rates={cd:0,acd:0,rd:0,st:0,ast:0,it:0};
+const money=n=>Number(n||0).toLocaleString('en-PK',{maximumFractionDigits:2});
+function pct(x){return (Number(x||0)*100).toFixed(2)+'%'}
+function cleanHS(v){return String(v).replace(/[^0-9]/g,'')}
+async function fetchTariff(){
+ const hs=cleanHS(document.getElementById('hs').value);
+ const status=document.getElementById('status');
+ if(!hs){status.textContent='Enter an HS/PCT code.';return}
+ status.textContent='Fetching current TIPP tariff…';
+ try{
+   const r=await fetch('/api/tariff?hs='+encodeURIComponent(hs));
+   const d=await r.json();
+   if(!r.ok) throw new Error(d.error||'Lookup failed');
+   rates.cd=Number(d.rates.cd||0); rates.acd=Number(d.rates.acd||0);
+   rates.rd=Number(d.rates.rd||0); rates.st=Number(d.rates.st||0);
+   rates.ast=Number(d.rates.ast||0); rates.it=Number(d.rates.it||0);
+   document.getElementById('commodity').innerHTML='<p><b>'+ (d.code||hs) +'</b> — '+(d.description||'')+'</p>';
+   document.getElementById('rates').innerHTML=
+    [['CD',rates.cd],['ACD',rates.acd],['RD',rates.rd],['ST',rates.st],['AST',rates.ast],['IT',rates.it]]
+    .map(x=>'<div class="rate"><b>'+x[0]+'</b><span>'+pct(x[1])+'</span></div>').join('');
+   status.textContent='TIPP tariff loaded. Validity: '+(d.validity||'see TIPP record');
+   calc();
+ }catch(e){status.textContent='Error: '+e.message}
+}
+function calc(){
+ const q=Number(document.getElementById('qty').value||0);
+ const p=Number(document.getElementById('price').value||0);
+ const fx=Number(document.getElementById('fx').value||0);
+ const cv=q*p*fx;
+ const cd=cv*rates.cd, acd=cv*rates.acd, rd=cv*rates.rd;
+ const st=(cv+cd+rd)*rates.st;
+ const ast=(cv+cd+rd)*rates.ast;
+ const it=(cv+cd+rd+acd+ast+st)*rates.it;
+ const total=cd+acd+rd+st+ast+it;
+ const landed=cv+total;
+ const rows=[['Customs Value (CV)',cv],['CD',cd],['ACD',acd],['RD',rd],['ST',st],['AST',ast],['IT',it],['Total Duties & Taxes',total],['Total Landed Value',landed]];
+ document.getElementById('breakdown').innerHTML=rows.map((r,i)=>'<div class="result '+(i>=7?'total':'')+'"><span>'+r[0]+'</span><b>'+money(r[1])+'</b></div>').join('');
+}
+</script>
 
-def pct(v):
-    if v is None: return 0.0
-    m=re.search(r'(\d+(?:\.\d+)?)\s*%', str(v))
-    return float(m.group(1))/100 if m else 0.0
-
-
-def _parse_rate(text):
-    m = re.search(r"(\d+(?:\.\d+)?)\s*%", text or "")
-    return float(m.group(1)) / 100 if m else 0.0
-
-
-def _numeric_id_from_href(href):
-    if not href:
-        return None
-    h = href.replace("%2F", "/").replace("%3D", "=").replace("&amp;", "&")
-    m = re.search(r"(?:^|[?&])id=(\d+)(?:&|$)", h, re.I)
-    return m.group(1) if m else None
-
-
-def _record_id_from_row(row):
-    for attr in ("data-key", "data-id", "data-record-id", "data-product-id"):
-        val = row.get(attr)
-        if val and re.fullmatch(r"\d+", str(val).strip()):
-            return str(val).strip()
-    for a in row.find_all("a", href=True):
-        rid = _numeric_id_from_href(a.get("href"))
-        if rid:
-            return rid
-    return None
-
-
-def _find_record_id(search_html, exact):
-    soup = BeautifulSoup(search_html, "html.parser")
-    compact = re.sub(r"[^0-9]", "", exact)
-
-    # TIPP uses Yii-style result rows in which the model key may be in data-key.
-    for row in soup.find_all("tr"):
-        txt = re.sub(r"[^0-9A-Za-z]", "", row.get_text(" ", strip=True))
-        if compact in txt or (len(compact) >= 8 and compact[:8] in txt):
-            rid = _record_id_from_row(row)
-            if rid:
-                return rid
-
-    # Fallback: valid numeric view link only. Never accept id= with no value.
-    for a in soup.find_all("a", href=True):
-        rid = _numeric_id_from_href(a.get("href"))
-        if rid:
-            txt = re.sub(r"[^0-9A-Za-z]", "", a.get_text(" ", strip=True))
-            if compact in txt or (len(compact) >= 8 and compact[:8] in txt):
-                return rid
-    return None
-
-
-def _search_tipp_for_record(session, exact):
-    candidates = [
-        {"Product[hscode]": exact}, {"Product[hs_code]": exact},
-        {"Product[hsCode]": exact}, {"SearchProduct[hscode]": exact},
-        {"SearchProduct[hs_code]": exact}, {"hscode": exact},
-        {"hs_code": exact}, {"HSCode": exact}
-    ]
-    last_status = "unknown"
-    for params in candidates:
-        params = dict(params)
-        params["r"] = "tradeInfo/searchProduct"
-        try:
-            rr = session.get(TIPP_BASE, params=params, timeout=30, verify=False)
-            last_status = rr.status_code
-            if rr.ok and exact in rr.text.replace(" ", ""):
-                rid = _find_record_id(rr.text, exact)
-                if rid:
-                    return rid
-        except requests.RequestException:
-            continue
-    raise RuntimeError(
-        f"TIPP search did not expose a valid numeric commodity record ID for {exact}. "
-        f"Last HTTP status: {last_status}."
-    )
-
-
-def lookup(hs):
-    raw = str(hs or "").strip()
-    digits = re.sub(r"[^0-9]", "", raw)
-
-    if len(digits) == 8:
-        hs8, exact = digits, digits + "0000"
-    elif len(digits) == 12:
-        hs8, exact = digits[:8], digits
-    elif len(digits) in (2, 4, 6):
-        hs8, exact = digits, digits
-    else:
-        raise ValueError(
-            "Enter the HS/PCT code in the format 9503.0090 (8 digits), "
-            "or a 12-digit TIPP code."
-        )
-
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) "
-                      "Chrome/140.0 Safari/537.36"
-    })
-
-    record_id = _search_tipp_for_record(session, exact)
-
-    # Critical fix: construct the commodity URL from the verified numeric ID.
-    view_url = f"{TIPP_BASE}?r=tradeInfo/view&id={record_id}"
-    rr = session.get(view_url, timeout=30, verify=False)
-    rr.raise_for_status()
-
-    soup = BeautifulSoup(rr.text, "html.parser")
-    rates = {"cd":0.0, "acd":0.0, "rd":0.0, "st":0.0, "ast":0.0, "it":0.0}
-    non_core = {"concessions":[], "exemptions":[], "provincial_cess":[]}
-
-    for tr in soup.find_all("tr"):
-        cells = [re.sub(r"\s+", " ", c.get_text(" ", strip=True)).strip()
-                 for c in tr.find_all(["th","td"])]
-        row = " | ".join(cells)
-        low = row.lower()
-
-        if "additional customs duty" in low or re.search(r"\bacd\b", low):
-            rates["acd"] = _parse_rate(row)
-        elif "customs duty" in low and "additional" not in low:
-            rates["cd"] = _parse_rate(row)
-        elif "regulatory duty" in low or re.search(r"\brd\b", low):
-            rates["rd"] = _parse_rate(row)
-        elif "additional sales tax" in low or re.search(r"\bast\b", low):
-            rates["ast"] = _parse_rate(row)
-        elif "sales tax" in low and "additional" not in low:
-            rates["st"] = _parse_rate(row)
-        elif "income tax" in low or re.search(r"\bit\b", low):
-            rates["it"] = _parse_rate(row)
-
-        if "concession" in low:
-            non_core["concessions"].append(row)
-        elif "exemption" in low or "exempt" in low:
-            non_core["exemptions"].append(row)
-        elif "provincial cess" in low or ("cess" in low and "provincial" in low):
-            non_core["provincial_cess"].append(row)
-
-    for k, vals in non_core.items():
-        seen = set()
-        non_core[k] = [x for x in vals if x and not (x in seen or seen.add(x))]
-
-    return {
-        "hs_code": hs8, "tipp_code": exact, "record_id": record_id,
-        "rates": rates, "non_core": non_core, "source_url": view_url
-    }
-
-
-@app.route("/")
-def index():
-    return send_from_directory(".", "index.html")
-
-
-@app.route("/health")
-def health():
-    return jsonify({"ok": True})
-
-
-@app.route("/api/tariff")
-def tariff():
-    hs = request.args.get("hs", "")
-    try:
-        return jsonify(lookup(hs))
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+<div id="nonCore" style="margin-top:16px;display:none;border:1px solid #ddd;border-radius:12px;padding:12px;background:#fafafa">
+<b>Additional TIPP information</b>
+<div style="font-size:13px;margin-top:6px;color:#555">Concessions/exemptions and provincial cess are informational only and <b>not automatically included</b> in CD/ACD/RD/ST/AST/IT.</div>
+<div id="nonCoreBody" style="margin-top:8px"></div>
+</div>
+</body>
+</html>
