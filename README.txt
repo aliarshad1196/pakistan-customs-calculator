@@ -1,17 +1,16 @@
-Pakistan Customs Duty Calculator
+Pakistan Customs Duty Calculator — dynamic TIPP search
 
-Enter HS/PCT in dotted 8-digit form, e.g. 9503.0090.
+Enter dotted 8-digit HS/PCT, e.g. 9503.0090.
 
-The app normalizes:
-9503.0090 -> 95030090 -> 950300900000
-
-TIPP record IDs are discovered from the search result and the commodity URL
-is constructed from the verified numeric record ID.
-
-Concessions, exemptions and provincial cess are kept separate and are not
-automatically included in CD/ACD/RD/ST/AST/IT.
+The backend:
+- normalizes 9503.0090 -> 95030090 -> 950300900000
+- opens TIPP's actual Search Commodity form
+- discovers the HSCODE field instead of guessing its Yii parameter name
+- submits the form and extracts a real numeric commodity record ID
+- constructs the commodity URL from that ID
+- keeps concessions/exemptions/provincial cess separate from CD/ACD/RD/ST/AST/IT
 
 Render:
-Build Command: pip install -r requirements.txt
-Start Command: gunicorn app:app
+Build: pip install -r requirements.txt
+Start: gunicorn app:app
 Root Directory: blank
