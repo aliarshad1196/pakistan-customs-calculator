@@ -3,6 +3,7 @@ import re
 import os
 import datetime
 from urllib.parse import quote_plus
+from pathlib import Path
 import requests
 import urllib3
 from bs4 import BeautifulSoup
@@ -13,6 +14,12 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__, static_folder=".")
 
 TIPP_BASE = "https://www.tipp.gov.pk/index.php"
+
+# Official FBR CPFTA Phase-II tariff schedule (SRO 1640(I)/2019),
+# using the HS-2022 amended schedule in SRO 1181(I)/2022.
+CPFTA_SRO_URL = "https://download1.fbr.gov.pk/SROs/2022729127282556SRO1181%28I%292022%2828.7.22%29.pdf"
+CPFTA_CACHE = "cpfta_sro_1181_2022.pdf"
+CPFTA_TEXT_CACHE = "cpfta_sro_1181_2022.txt"
 
 # TIPP's public product-search page exposes HS codes, but currently does not
 # reliably expose the commodity record ID needed by the detail page.
@@ -219,7 +226,7 @@ def _download_cpfta_text(session):
             parts.append(page.extract_text() or "")
         except Exception:
             continue
-    text = re.sub(r"\\s+", " ", " ".join(parts)).strip()
+    text = re.sub(r"\s+", " ", " ".join(parts)).strip()
     try:
         Path(CPFTA_TEXT_CACHE).write_text(text, encoding="utf-8")
     except Exception:
@@ -244,26 +251,26 @@ def cpfta_current_rate(hs8, session):
     if year_no < 1 or year_no > 15:
         return None, None
     text = _download_cpfta_text(session)
-    marker = re.search(r"PCT Code\\s+" + re.escape(code) + r"\\b", text, flags=re.I)
+    marker = re.search(r"PCT Code\s+" + re.escape(code) + r"\b", text, flags=re.I)
     if not marker:
         return None, None
     start = marker.start()
-    nxt = re.search(r"\\bPCT Code\\s+\\d{8}\\b", text[marker.end():], flags=re.I)
+    nxt = re.search(r"\bPCT Code\s+\d{8}\b", text[marker.end():], flags=re.I)
     end = marker.end() + nxt.start() if nxt else min(len(text), marker.end() + 1800)
     row = text[start:end]
-    vals = re.findall(r"Year\\s+(\\d{1,2})\\s+([^ ]+)", row, flags=re.I)
+    vals = re.findall(r"Year\s+(\d{1,2})\s+([^ ]+)", row, flags=re.I)
     table = {int(n): v for n, v in vals if int(n) <= 15}
     raw = table.get(year_no)
     if raw is None:
         # Some PDF extraction layouts omit the repeated 'Year N' labels.
         # Fall back to the ordered values following Year 1.
-        m = re.search(r"Year\\s+1\\s+", row, flags=re.I)
+        m = re.search(r"Year\s+1\s+", row, flags=re.I)
         if m:
             tail = row[m.end():]
-            tokens = re.split(r"\\s+", tail)
+            tokens = re.split(r"\s+", tail)
             candidates = []
             for tok in tokens:
-                if re.fullmatch(r"(?:\\d+(?:\\.\\d+)?|no)", tok, flags=re.I):
+                if re.fullmatch(r"(?:\d+(?:\.\d+)?|no)", tok, flags=re.I):
                     candidates.append(tok)
                     if len(candidates) >= 15:
                         break

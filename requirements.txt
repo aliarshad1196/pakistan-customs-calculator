@@ -1,6 +1,6 @@
-Flask>=3.0
-requests>=2.31
-beautifulsoup4>=4.12
-gunicorn>=22.0
-
-pypdf>=5.0.0
+Flask
+requests
+urllib3
+beautifulsoup4
+pypdf
+gunicorn
