@@ -91,5 +91,11 @@ function calc(){
  document.getElementById('breakdown').innerHTML=rows.map((r,i)=>'<div class="result '+(i>=7?'total':'')+'"><span>'+r[0]+'</span><b>'+money(r[1])+'</b></div>').join('');
 }
 </script>
+
+<div id="nonCore" style="margin-top:16px;display:none;border:1px solid #ddd;border-radius:12px;padding:12px;background:#fafafa">
+<b>Additional TIPP information</b>
+<div style="font-size:13px;margin-top:6px;color:#555">Concessions/exemptions and provincial cess are informational only and <b>not automatically included</b> in CD/ACD/RD/ST/AST/IT.</div>
+<div id="nonCoreBody" style="margin-top:8px"></div>
+</div>
 </body>
 </html>
