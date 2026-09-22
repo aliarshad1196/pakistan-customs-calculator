@@ -99,11 +99,6 @@ details[open] summary:after{content:"−"}
 <div><label>Unit Price</label><input id="price" type="number" step="any" value="0" oninput="calc()"></div>
 <div><label>Exchange Rate</label><input id="fx" type="number" step="any" value="280" oninput="calc()"></div>
 </div>
-<div style="margin-top:12px">
-<label class="check-label"><input id="manualCV" type="checkbox" style="width:auto;margin-top:3px" onchange="toggleManualCV()"> Enter Customs Value (CV) manually</label>
-<input id="manualCvValue" type="number" step="any" placeholder="Enter manual CV" disabled oninput="calc()" style="margin-top:7px">
-<small id="cvHint" style="display:block;margin-top:6px;opacity:.7">CV will be calculated as Quantity × Unit Price × Exchange Rate.</small>
-</div>
 <button class="secondary" onclick="calc()">Calculate</button>
 </div>
 
@@ -231,15 +226,16 @@ function toggleAST(){
  const d=document.getElementById('astDetails');
  if(d) d.open=!d.open;
 }
-function toggleManualCV(){
- const box=document.getElementById('manualCV');
- const input=document.getElementById('manualCvValue');
- const hint=document.getElementById('cvHint');
- if(input){
-   input.disabled=!box.checked;
-   if(box.checked) input.focus();
- }
- if(hint) hint.textContent=box.checked?'Manual CV is being used for all duty and tax calculations.':'CV will be calculated as Quantity × Unit Price × Exchange Rate.';
+let manualCVActive=false;
+let manualCVValue=0;
+function setManualCV(value){
+ manualCVActive=true;
+ manualCVValue=Number(value||0);
+ calc();
+}
+function resetManualCV(){
+ manualCVActive=false;
+ manualCVValue=0;
  calc();
 }
 function toggleGST(){
@@ -254,10 +250,8 @@ function calc(){
  const q=Number(document.getElementById('qty').value||0);
  const p=Number(document.getElementById('price').value||0);
  const fx=Number(document.getElementById('fx').value||0);
- const manual=document.getElementById('manualCV');
- const manualValue=Number(document.getElementById('manualCvValue').value||0);
  const calculatedCv=q*p*fx;
- const cv=manual && manual.checked ? manualValue : calculatedCv;
+ const cv=manualCVActive ? manualCVValue : calculatedCv;
  const cd=cv*rates.cd, acd=cv*rates.acd, rd=cv*rates.rd;
  const effectiveIt=rates.it;
  const st=(cv+cd+acd+rd)*rates.st;
@@ -266,8 +260,12 @@ function calc(){
  const itBase=cv+cd+acd+rd+st+(gstMode?gst:ast);
  const it=itBase*effectiveIt;
  const total=cd+acd+rd+st+ast+gst+it;
+ const incidence=cv>0 ? (total/cv)*100 : 0;
  const rows=[['Customs Value (CV)',cv],['CD',cd],['ACD',acd],['RD',rd],['ST',st],['AST',ast],...(gstMode?[['GST',gst]]:[]),['IT',it],['Total Duties & Taxes',total]];
- document.getElementById('breakdown').innerHTML=rows.map((r,i)=>'<div class="result '+(i>=7?'total':'')+'"><span>'+r[0]+'</span><b>'+money(r[1])+'</b></div>').join('');
+ let html='<div class="result"><span>Customs Value (CV)</span><div style="display:flex;align-items:center;gap:8px;justify-content:flex-end"><input id="breakdownCV" type="number" step="any" value="'+(manualCVActive?manualCVValue:cv)+'" oninput="setManualCV(this.value)" style="width:180px;margin:0;text-align:right" title="Edit CV manually"><button type="button" class="secondary" onclick="resetManualCV()" style="padding:6px 10px;margin:0" title="Use calculated CV">Auto</button></div></div>';
+ html+='<div class="result"><span>Total Incidence</span><b>'+incidence.toFixed(4)+'%</b></div>';
+ html+=rows.slice(1).map((r,i)=>'<div class="result '+((i+1)>=7?'total':'')+'"><span>'+r[0]+'</span><b>'+money(r[1])+'</b></div>').join('');
+ document.getElementById('breakdown').innerHTML=html;
 }
 </script>
 
