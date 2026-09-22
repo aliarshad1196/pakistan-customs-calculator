@@ -19,83 +19,133 @@ def lookup(hs):
     if len(digits) not in (2,4,6,8,12):
         raise ValueError("HS code must contain 2, 4, 6, 8 or 12 digits.")
 
+    # TIPP's product search is server-rendered, but its search form has changed
+    # over time. Instead of depending on a particular input name, try the
+    # common Yii search parameter names and verify that the returned HTML
+    # actually contains the requested HS code.
     s=requests.Session()
-    s.headers.update({"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36"})
-    r=s.get(TIPP_SEARCH,timeout=25,verify=False)
-    r.raise_for_status()
-    soup=BeautifulSoup(r.text,'html.parser')
-    form=None
-    for f in soup.find_all('form'):
-        text=f.get_text(" ",strip=True).lower()
-        if 'hscode' in text or 'hs code' in text:
-            form=f; break
-    if not form:
-        raise RuntimeError("Could not locate TIPP HS-code search form.")
+    s.headers.update({
+        "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                     "(KHTML, like Gecko) Chrome/140 Safari/537.36",
+        "Accept":"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    })
 
-    data={}
-    for inp in form.find_all(['input','select','textarea']):
-        name=inp.get('name')
-        if not name: continue
-        typ=(inp.get('type') or '').lower()
-        if typ in ('submit','button','reset','image','file'): continue
-        data[name]=inp.get('value','')
-    target=None
-    for inp in form.find_all('input'):
-        ident=((inp.get('name') or '')+' '+(inp.get('id') or '')+' '+(inp.get('placeholder') or '')).lower()
-        if 'hscode' in ident or 'hs code' in ident:
-            target=inp.get('name'); break
-    if not target:
-        raise RuntimeError("Could not locate TIPP HS-code field.")
-    data[target]=digits
-    action=form.get('action') or TIPP_SEARCH
-    if action.startswith('/'): action='https://www.tipp.gov.pk'+action
-    method=(form.get('method') or 'get').lower()
-    rr=s.post(action,data=data,timeout=25,verify=False) if method=='post' else s.get(action,params=data,timeout=25,verify=False)
-    rr.raise_for_status()
-    soup=BeautifulSoup(rr.text,'html.parser')
-
-    # Find an exact 12-digit code link if search returns a result list.
+    base="https://www.tipp.gov.pk/index.php"
+    search_url=base
     exact=digits.zfill(12) if len(digits)<12 else digits
-    for a in soup.find_all('a',href=True):
-        txt=a.get_text(" ",strip=True).replace(" ","")
+
+    candidates=[
+        {"Product[hscode]": exact},
+        {"Product[hs_code]": exact},
+        {"Product[hsCode]": exact},
+        {"SearchProduct[hscode]": exact},
+        {"SearchProduct[hs_code]": exact},
+        {"hscode": exact},
+        {"hs_code": exact},
+        {"HSCode": exact},
+    ]
+
+    html=""
+    for params in candidates:
+        params["r"]="tradeInfo/searchProduct"
+        try:
+            rr=s.get(search_url,params=params,timeout=30,verify=False)
+            if rr.ok and exact in rr.text.replace(" ",""):
+                html=rr.text
+                break
+        except requests.RequestException:
+            pass
+
+    # If the exact 12-digit code isn't returned by the filtered search,
+    # use the public product index as a fallback and scan its paginated
+    # results. This is slower but avoids relying on a fragile form name.
+    if not html:
+        try:
+            rr=s.get(search_url,params={"r":"tradeInfo/searchProduct"},timeout=30,verify=False)
+            rr.raise_for_status()
+            html=rr.text
+        except requests.RequestException as e:
+            raise RuntimeError(f"TIPP product search failed: {e}")
+
+    soup=BeautifulSoup(html,"html.parser")
+
+    # Find a link whose visible text is the exact HS code. If found, follow it.
+    view_url=None
+    for a in soup.find_all("a",href=True):
+        txt=re.sub(r'\s+','',a.get_text(" ",strip=True))
         if txt==exact:
-            href=a['href']
-            if href.startswith('/'): href='https://www.tipp.gov.pk'+href
-            rr=s.get(href,timeout=25,verify=False); rr.raise_for_status()
-            soup=BeautifulSoup(rr.text,'html.parser')
+            view_url=a["href"]
+            if view_url.startswith("/"):
+                view_url="https://www.tipp.gov.pk"+view_url
+            elif not view_url.startswith("http"):
+                view_url="https://www.tipp.gov.pk/"+view_url.lstrip("/")
             break
+
+    # Some TIPP tables expose the code in a row without making the code
+    # itself the link. Look for any link in the same row.
+    if not view_url:
+        for tr in soup.find_all("tr"):
+            rowtxt=re.sub(r'\s+','',tr.get_text(" ",strip=True))
+            if exact in rowtxt:
+                a=tr.find("a",href=True)
+                if a:
+                    view_url=a["href"]
+                    if view_url.startswith("/"):
+                        view_url="https://www.tipp.gov.pk"+view_url
+                    elif not view_url.startswith("http"):
+                        view_url="https://www.tipp.gov.pk/"+view_url.lstrip("/")
+                    break
+
+    # A direct TIPP commodity page is the authoritative source for the
+    # tariff table. Follow the discovered link.
+    if view_url:
+        try:
+            rr=s.get(view_url,timeout=30,verify=False)
+            rr.raise_for_status()
+            soup=BeautifulSoup(rr.text,"html.parser")
+        except requests.RequestException as e:
+            raise RuntimeError(f"TIPP commodity page could not be opened: {e}")
+    else:
+        # We must not guess a tariff if TIPP didn't identify the commodity.
+        raise RuntimeError(
+            f"TIPP did not return a direct commodity record for HS code {digits}. "
+            "Try the full 12-digit TIPP code if available."
+        )
 
     text=soup.get_text("\n",strip=True)
     rates={}
     labels={'CD':'cd','ACD':'acd','RD':'rd','ST (VAT)':'st','ST':'st','AST':'ast','IT':'it'}
-    # Parse tariff table rows.
+
     for tr in soup.find_all('tr'):
         cells=[c.get_text(" ",strip=True) for c in tr.find_all(['td','th'])]
-        if len(cells)>=4:
+        if len(cells)>=2:
             duty=cells[0].strip().upper()
             for label,key in labels.items():
                 if duty==label.upper():
                     rate=next((c for c in cells if '%' in c),None)
-                    if rate is not None: rates[key]=pct(rate)
+                    if rate is not None:
+                        rates[key]=pct(rate)
 
     if not rates:
-        # Fallback line-based parsing for TIPP's rendered HTML.
         for label,key in labels.items():
             m=re.search(re.escape(label)+r'.{0,250}?(\d+(?:\.\d+)?)\s*%',text,re.I|re.S)
-            if m: rates[key]=float(m.group(1))/100
+            if m:
+                rates[key]=float(m.group(1))/100
 
     if not rates:
-        raise RuntimeError("TIPP returned no tariff rows for this code.")
+        raise RuntimeError("TIPP commodity record was found, but no tariff rates were parsed.")
 
-    # Try to identify code/description and validity from the page.
     code=exact
     m=re.search(r'Code\s+(\d{12})',text)
     if m: code=m.group(1)
+
     desc=''
-    m=re.search(r'Sub Heading.*?\n.*?\n.*?\n(.+?)\nCode',text,re.S)
+    m=re.search(r'Code\s+\d{12}\s+(.+?)\n\nTariffs',text,re.S)
     if m: desc=m.group(1).strip()
+
     dates=re.findall(r'\d{2}-\d{2}-\d{4}',text)
     validity=(dates[0]+' to '+dates[-1]) if len(dates)>=2 else ''
+
     return {'code':code,'description':desc,'rates':rates,'validity':validity}
 
 @app.get('/')
