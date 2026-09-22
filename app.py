@@ -278,7 +278,9 @@ def cpfta_current_rate(hs8, session=None):
         }
 
     try:
-        rate = float(raw_clean) / 100.0
+        # CPFTA rates are applied/displayed to two decimal places.
+        # Example: 10.666667% -> 10.67%.
+        rate = round(float(raw_clean), 2) / 100.0
     except ValueError:
         return None, {
             "year": year_no, "raw": raw_clean, "category": row.get("Category", ""),
