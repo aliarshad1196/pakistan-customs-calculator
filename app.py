@@ -156,3 +156,26 @@ def lookup(hs):
         "hs_code": hs8, "tipp_code": exact, "record_id": record_id,
         "rates": rates, "non_core": non_core, "source_url": view_url
     }
+
+
+@app.route("/")
+def index():
+    return send_from_directory(".", "index.html")
+
+
+@app.route("/health")
+def health():
+    return jsonify({"ok": True})
+
+
+@app.route("/api/tariff")
+def tariff():
+    hs = request.args.get("hs", "")
+    try:
+        return jsonify(lookup(hs))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=False)
