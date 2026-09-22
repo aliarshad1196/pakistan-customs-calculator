@@ -99,6 +99,11 @@ details[open] summary:after{content:"−"}
 <div><label>Unit Price</label><input id="price" type="number" step="any" value="0" oninput="calc()"></div>
 <div><label>Exchange Rate</label><input id="fx" type="number" step="any" value="280" oninput="calc()"></div>
 </div>
+<div style="margin-top:12px">
+<label class="check-label"><input id="manualCV" type="checkbox" style="width:auto;margin-top:3px" onchange="toggleManualCV()"> Enter Customs Value (CV) manually</label>
+<input id="manualCvValue" type="number" step="any" placeholder="Enter manual CV" disabled oninput="calc()" style="margin-top:7px">
+<small id="cvHint" style="display:block;margin-top:6px;opacity:.7">CV will be calculated as Quantity × Unit Price × Exchange Rate.</small>
+</div>
 <button class="secondary" onclick="calc()">Calculate</button>
 </div>
 
@@ -226,6 +231,17 @@ function toggleAST(){
  const d=document.getElementById('astDetails');
  if(d) d.open=!d.open;
 }
+function toggleManualCV(){
+ const box=document.getElementById('manualCV');
+ const input=document.getElementById('manualCvValue');
+ const hint=document.getElementById('cvHint');
+ if(input){
+   input.disabled=!box.checked;
+   if(box.checked) input.focus();
+ }
+ if(hint) hint.textContent=box.checked?'Manual CV is being used for all duty and tax calculations.':'CV will be calculated as Quantity × Unit Price × Exchange Rate.';
+ calc();
+}
 function toggleGST(){
  gstMode=!gstMode;
  const astInput=document.getElementById('rate_ast');
@@ -238,7 +254,10 @@ function calc(){
  const q=Number(document.getElementById('qty').value||0);
  const p=Number(document.getElementById('price').value||0);
  const fx=Number(document.getElementById('fx').value||0);
- const cv=q*p*fx;
+ const manual=document.getElementById('manualCV');
+ const manualValue=Number(document.getElementById('manualCvValue').value||0);
+ const calculatedCv=q*p*fx;
+ const cv=manual && manual.checked ? manualValue : calculatedCv;
  const cd=cv*rates.cd, acd=cv*rates.acd, rd=cv*rates.rd;
  const effectiveIt=rates.it;
  const st=(cv+cd+acd+rd)*rates.st;
