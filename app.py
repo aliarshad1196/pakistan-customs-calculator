@@ -1,7 +1,9 @@
 from flask import Flask, request, jsonify, send_from_directory
-import re, requests
+import re, requests, urllib3
 from bs4 import BeautifulSoup
 from urllib.parse import quote
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app=Flask(__name__, static_folder='.')
 
@@ -19,7 +21,7 @@ def lookup(hs):
 
     s=requests.Session()
     s.headers.update({"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36"})
-    r=s.get(TIPP_SEARCH,timeout=25)
+    r=s.get(TIPP_SEARCH,timeout=25,verify=False)
     r.raise_for_status()
     soup=BeautifulSoup(r.text,'html.parser')
     form=None
@@ -48,7 +50,7 @@ def lookup(hs):
     action=form.get('action') or TIPP_SEARCH
     if action.startswith('/'): action='https://www.tipp.gov.pk'+action
     method=(form.get('method') or 'get').lower()
-    rr=s.post(action,data=data,timeout=25) if method=='post' else s.get(action,params=data,timeout=25)
+    rr=s.post(action,data=data,timeout=25,verify=False) if method=='post' else s.get(action,params=data,timeout=25,verify=False)
     rr.raise_for_status()
     soup=BeautifulSoup(rr.text,'html.parser')
 
@@ -59,7 +61,7 @@ def lookup(hs):
         if txt==exact:
             href=a['href']
             if href.startswith('/'): href='https://www.tipp.gov.pk'+href
-            rr=s.get(href,timeout=25); rr.raise_for_status()
+            rr=s.get(href,timeout=25,verify=False); rr.raise_for_status()
             soup=BeautifulSoup(rr.text,'html.parser')
             break
 
@@ -99,6 +101,10 @@ def lookup(hs):
 @app.get('/')
 def home():
     return send_from_directory('.', 'index.html')
+
+@app.get('/health')
+def health():
+    return jsonify({'status':'ok'})
 
 @app.get('/api/tariff')
 def tariff():
