@@ -33,7 +33,6 @@ button.secondary{background:#edf4ff;color:#1259c4;box-shadow:none;border:1px sol
 .rate{background:linear-gradient(180deg,#fbfdff,#f5f8fc);padding:11px;border-radius:14px;border:1px solid var(--line)}
 .rate b{display:block;font-size:11px;color:#526277;margin-bottom:6px;letter-spacing:.2px}
 .rate input{padding:10px 9px;font-size:16px;font-weight:800;background:#fff}
-.rate small{display:block;margin-top:5px;font-size:10px;color:#7a8798;line-height:1.35}
 .options-card{margin-top:16px;padding-top:16px;border-top:1px solid #edf1f5}
 .option-row{display:flex;align-items:center;gap:10px;padding:11px 12px;border:1px solid var(--line);border-radius:12px;background:#fbfcfe;margin-top:10px;cursor:pointer}
 .option-row:hover{background:#f6f9fd;border-color:#cfdceb}
@@ -51,10 +50,11 @@ details[open] summary:after{content:"−"}
 .check-label{display:flex;align-items:flex-start;gap:9px;font-weight:650;cursor:pointer;padding:7px 0;margin:0;color:#3c4a5b;font-size:12px;line-height:1.35}
 .check-label input{width:16px;height:16px;padding:0;margin:1px 0 0;flex:0 0 auto;accent-color:var(--green)}
 .result{display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid #edf1f5;font-size:13px}.result span{color:#526277}.result b{color:#1c2d40}.total{font-size:15px;font-weight:800;padding-top:14px}.total span{color:var(--navy);font-weight:800}.total b{color:var(--green);font-size:17px}
-#nonCore{margin-top:0!important;background:#fbfcfe!important;border-color:var(--line)!important;color:#3d4c5d}
-#nonCore b{color:var(--navy)}
-#nonCore hr{border:0;border-top:1px solid #e8edf3;margin:10px 0}
-#astInfo{padding:9px 10px;border-radius:10px;background:#f5f8fb;margin-top:12px!important}
+#nonCore{margin-top:16px!important}
+.tipp-extra{padding:13px 14px 14px;color:#3d4c5d;font-size:12px;line-height:1.5}
+.tipp-extra b{color:var(--navy)}
+.tipp-extra hr{border:0;border-top:1px solid #e8edf3;margin:10px 0}
+.tipp-validity{color:var(--muted);font-size:11px;line-height:1.5;margin-bottom:8px}
 #status{min-height:18px}
 @media(max-width:620px){.rates{grid-template-columns:1fr 1fr}.wrap{padding:14px 12px 34px}.hero h1{font-size:24px}.card{padding:17px}}
 @media(max-width:430px){.grid,.rates{grid-template-columns:1fr 1fr}.grid{gap:9px}.rates{gap:8px}.rate{padding:10px}.rate input{font-size:15px}.hero{padding:22px 18px}}
@@ -72,10 +72,8 @@ details[open] summary:after{content:"−"}
 <button onclick="fetchTariff()">Fetch TIPP Rates</button>
 <div id="status" class="status"></div>
 <div id="commodity"></div>
-<div class="status" style="margin-top:12px">TIPP rates are loaded automatically, but you can edit any rate manually.</div>
 <div class="section-head" style="margin-top:18px;margin-bottom:0"><h2 style="font-size:15px">Duty & Tax Rates</h2><span class="section-note">Editable</span></div>
 <div id="rates" class="rates"></div>
-<div id="astInfo" class="status" style="margin-top:10px"></div>
 <div id="options" class="options-card" style="display:none">
 <details style="margin-bottom:12px">
 <summary>Twelfth Schedule / AST conditions</summary>
@@ -90,13 +88,10 @@ details[open] summary:after{content:"−"}
 <label class="check-label"><input id="goldUnworked" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Gold in un-worked condition</label>
 <label class="check-label"><input id="silverUnworked" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Silver in un-worked condition</label>
 <label class="check-label"><input id="coalIPP" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Coal imported exclusively/directly for supply to Independent Power Producers (IPP)</label>
-<div id="astFactStatus" class="status"></div>
 </div>
 </details>
 <label class="option-row"><input id="fta" type="checkbox" style="width:auto" onchange="applyOptions()"> Apply Pak-China FTA (CD) rate</label>
-<div id="ftaInfo" class="status"></div>
 <label class="option-row"><input id="incomeTaxCommercial" type="checkbox" style="width:auto" onchange="applyOptions()"> Income Tax Commercial importer</label>
-<div id="incomeTaxInfo" class="status"></div>
 </div>
 </div>
 
@@ -152,13 +147,10 @@ async function fetchTariff(){
    document.getElementById('commodity').innerHTML='<p><b>'+ (d.code||hs) +'</b> — '+(d.description||'')+'</p>';
    document.getElementById('rates').innerHTML=
     [['CD','cd'],['ACD','acd'],['RD','rd'],['ST','st'],['AST','ast'],['IT','it']]
-    .map(x=>'<div class="rate"><b>'+x[0]+' Rate (%)</b><input id="rate_'+x[1]+'" type="number" min="0" step="0.01" value="'+(Number(rates[x[1]])*100)+'" oninput="syncManualRate(\''+x[1]+'\')"><small>'+ (x[1]==='ast' ? 'Editable • '+astSource.name+': '+pct(rates[x[1]]) : 'Editable • TIPP: '+pct(rates[x[1]])) +'</small></div>').join('');
+    .map(x=>'<div class="rate"><b>'+x[0]+' Rate (%)</b><input id="rate_'+x[1]+'" type="number" min="0" step="0.01" value="'+(Number(rates[x[1]])*100)+'" oninput="syncManualRate(\''+x[1]+'\')"></div>').join('');
    document.getElementById('options').style.display='block';
-   const astNote=document.getElementById('astInfo');
-   if(astNote) astNote.innerHTML='<b>AST rule:</b> '+astSource.name+' — '+astSource.note;
    const ftaBox=document.getElementById('fta');
    ftaBox.disabled=specialRates.pak_china_fta_cd===null;
-   document.getElementById('ftaInfo').textContent = specialRates.pak_china_fta_cd===null ? 'Current CPFTA rate is not listed for this HS code.' : ((d.special_details?.pak_china_fta_cd||'Current CPFTA phase-down rate')+' — '+pct(specialRates.pak_china_fta_cd));
    applyOptions();
    const nc=d.non_core||{};
    const groups=[];
@@ -166,8 +158,9 @@ async function fetchTariff(){
    if((nc.exemptions||[]).length) groups.push('<b>Exemptions</b><br>'+nc.exemptions.join('<br>'));
    if((nc.provincial_cess||[]).length) groups.push('<b>Provincial cess</b><br>'+nc.provincial_cess.join('<br>'));
    document.getElementById('nonCoreBody').innerHTML=groups.join('<hr>');
-   document.getElementById('nonCore').style.display=groups.length?'block':'none';
-   status.textContent='TIPP tariff loaded. AST rule applied: '+(astSource.status||'default')+'. Validity: '+(d.validity||'see TIPP record');
+   document.getElementById('nonCore').style.display='block';
+   document.getElementById('tippValidity').textContent=d.validity||'';
+   status.textContent='';
    calc();
  }catch(e){status.textContent='Error: '+e.message}
 }
@@ -188,7 +181,6 @@ async function refreshASTRule(){
  const hs=cleanHS(document.getElementById('hs').value);
  if(!hs) return;
  const status=document.getElementById('astFactStatus');
- if(status) status.textContent='Updating AST rule…';
  try{
   const params=new URLSearchParams({hs,...astFacts()});
   const r=await fetch('/api/ast?'+params.toString());
@@ -198,11 +190,8 @@ async function refreshASTRule(){
   setRateInput('ast',astSource.rate);
   const astInput=document.getElementById('rate_ast');
   if(astInput) astInput.value=(Number(astSource.rate||0)*100).toString();
-  const astNote=document.getElementById('astInfo');
-  if(astNote) astNote.innerHTML='<b>AST rule:</b> '+astSource.name+' — '+astSource.note;
-  if(status) status.textContent='Applied: '+pct(astSource.rate)+' — '+astSource.name;
   calc();
- }catch(e){ if(status) status.textContent='AST rule error: '+e.message; }
+ }catch(e){ if(status) status.textContent='Error: '+e.message; }
 }
 function syncManualRate(key){
  const el=document.getElementById('rate_'+key);
@@ -218,19 +207,14 @@ function applyOptions(){
  const fta=document.getElementById('fta');
  if(fta && fta.checked && specialRates.pak_china_fta_cd!==null){
    setRateInput('cd',specialRates.pak_china_fta_cd);
-   document.getElementById('ftaInfo').textContent='Applied current CPFTA rate: '+pct(specialRates.pak_china_fta_cd);
  } else if(fta && !fta.disabled){
    setRateInput('cd',tippRates.cd);
-   document.getElementById('ftaInfo').textContent='Current CPFTA rate: '+pct(specialRates.pak_china_fta_cd);
  }
  const itBox=document.getElementById('incomeTaxCommercial');
- const itInfo=document.getElementById('incomeTaxInfo');
  if(itBox && itBox.checked && specialRates.income_tax_exemption_first_schedule_ii!==null){
    setRateInput('it',specialRates.income_tax_exemption_first_schedule_ii);
-   if(itInfo) itInfo.textContent='Applied First Schedule II commercial-importer rate: '+pct(specialRates.income_tax_exemption_first_schedule_ii);
- } else if(itInfo){
+ } else {
    setRateInput('it',tippRates.it);
-   itInfo.textContent='TIPP IT rate: '+pct(tippRates.it);
  }
  calc();
 }
@@ -245,16 +229,19 @@ function calc(){
  const ast=(cv+cd+acd+rd)*rates.ast;
  const it=(cv+cd+rd+acd+ast+st)*effectiveIt;
  const total=cd+acd+rd+st+ast+it;
- const landed=cv+total;
- const rows=[['Customs Value (CV)',cv],['CD',cd],['ACD',acd],['RD',rd],['ST',st],['AST',ast],['IT',it],['Total Duties & Taxes',total],['Total Landed Value',landed]];
+ const rows=[['Customs Value (CV)',cv],['CD',cd],['ACD',acd],['RD',rd],['ST',st],['AST',ast],['IT',it],['Total Duties & Taxes',total]];
  document.getElementById('breakdown').innerHTML=rows.map((r,i)=>'<div class="result '+(i>=7?'total':'')+'"><span>'+r[0]+'</span><b>'+money(r[1])+'</b></div>').join('');
 }
 </script>
 
-<div id="nonCore" style="margin-top:16px;display:none;border:1px solid #ddd;border-radius:12px;padding:12px;background:#fafafa">
-<b>Additional TIPP information</b>
-<div style="font-size:13px;margin-top:6px;color:#555">Concessions/exemptions and provincial cess are informational only and <b>not automatically included</b> in CD/ACD/RD/ST/AST/IT.</div>
-<div id="nonCoreBody" style="margin-top:8px"></div>
+<div id="nonCore" style="margin-top:16px;display:none">
+<details>
+<summary>Additional TIPP Information</summary>
+<div class="tipp-extra">
+<div id="tippValidity" class="tipp-validity"></div>
+<div id="nonCoreBody"></div>
+</div>
+</details>
 </div>
 </body>
 </html>
