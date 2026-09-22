@@ -7,7 +7,7 @@ from pathlib import Path
 import requests
 import urllib3
 from bs4 import BeautifulSoup
-import fitz  # PyMuPDF
+import csv
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -29,11 +29,12 @@ def api_500(error):
 
 TIPP_BASE = "https://www.tipp.gov.pk/index.php"
 
-# Official FBR CPFTA Phase-II tariff schedule (SRO 1640(I)/2019),
-# using the HS-2022 amended schedule in SRO 1181(I)/2022.
-CPFTA_SRO_URL = "https://download1.fbr.gov.pk/SROs/2022729127282556SRO1181%28I%292022%2828.7.22%29.pdf"
-CPFTA_CACHE = "cpfta_sro_1181_2022.pdf"
-CPFTA_TEXT_CACHE = "cpfta_sro_1181_2022.txt"
+# Local CPFTA tariff-elimination schedule converted from the supplied
+# Pakistan-China FTA Excel schedule. Keeping the schedule local avoids
+# downloading/parsing a large PDF on Render for every tariff lookup.
+CPFTA_DATA_FILE = os.path.join(os.path.dirname(__file__), "data", "cpfta_rates.csv")
+CPFTA_SRO_URL = "https://download1.fbr.gov.pk/SROs/201912311712571769CPFTASRO1640%28I%29201931.12.2019.pdf"
+CPFTA_DATA_CACHE = None
 
 # TIPP's public product-search page exposes HS codes, but currently does not
 # reliably expose the commodity record ID needed by the detail page.
@@ -221,100 +222,77 @@ def table_headers(table):
     return [clean_text(c.get_text(" ", strip=True)).lower() for c in header_row.find_all(["th", "td"])]
 
 
-def _find_cpfta_row_text(hs8, session):
-    """Download the official CPFTA PDF and scan pages only until hs8 is found.
+def _load_cpfta_schedule():
+    """Load the local CPFTA schedule once per worker.
 
-    The previous implementation extracted text from every page before looking
-    for the requested PCT.  On Render that can be unnecessarily expensive.
-    PyMuPDF lets us inspect one page at a time and stop as soon as the code is
-    found.
+    The supplied Excel schedule is stored in GitHub as a lightweight CSV.
+    HS codes are kept as strings so leading zeroes are preserved.
     """
-    code = re.sub(r"[^0-9]", "", hs8)[:8]
-    if len(code) != 8:
-        return None
+    global CPFTA_DATA_CACHE
+    if CPFTA_DATA_CACHE is not None:
+        return CPFTA_DATA_CACHE
 
-    if not os.path.exists(CPFTA_CACHE):
-        r = session.get(CPFTA_SRO_URL, timeout=(20, 120), verify=False)
-        r.raise_for_status()
-        with open(CPFTA_CACHE, "wb") as f:
-            f.write(r.content)
+    if not os.path.exists(CPFTA_DATA_FILE):
+        raise FileNotFoundError(f"CPFTA data file not found: {CPFTA_DATA_FILE}")
 
-    needle = re.compile(r"PCT\s+Code\s+" + re.escape(code) + r"\b", re.I)
-    with fitz.open(CPFTA_CACHE) as doc:
-        for page in doc:
-            try:
-                text = page.get_text("text") or ""
-            except Exception:
+    data = {}
+    with open(CPFTA_DATA_FILE, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            code = re.sub(r"[^0-9]", "", str(row.get("HS Code", "")))
+            if len(code) != 8:
                 continue
-            if needle.search(text):
-                # Include adjacent pages because a table row can be split by a
-                # PDF page boundary.
-                page_no = page.number
-                chunks = []
-                for n in range(max(0, page_no - 1), min(len(doc), page_no + 2)):
-                    try:
-                        chunks.append(doc[n].get_text("text") or "")
-                    except Exception:
-                        pass
-                return re.sub(r"\s+", " ", " ".join(chunks)).strip()
-    return None
+            data[code] = row
+
+    CPFTA_DATA_CACHE = data
+    return data
 
 
-def cpfta_current_rate(hs8, session):
-    """Return the current CPFTA preferential CD rate for an 8-digit PCT.
+def cpfta_current_rate(hs8, session=None):
+    """Return the current CPFTA preferential CD rate from the local schedule.
 
-    SRO 1640(I)/2019 contains a 15-year phase-down beginning 1-Jan-2020.
-    Year 7 therefore applies during calendar year 2026.  The function reads
-    the official FBR schedule for the requested PCT rather than using stale
-    TIPP concession rows.
+    The supplied schedule starts with Year 1 in 2020, so calendar year 2026
+    corresponds to Year 7.  The rate is specific to the requested PCT code;
+    there is no universal CPFTA rate.
     """
     code = re.sub(r"[^0-9]", "", hs8)[:8]
     if len(code) != 8:
         return None, None
+
     today = datetime.date.today()
-    if today < datetime.date(2020, 1, 1):
-        return None, None
     year_no = today.year - 2020 + 1
     if year_no < 1 or year_no > 15:
         return None, None
 
-    text = _find_cpfta_row_text(code, session)
-    if not text:
-        return None, None
+    schedule = _load_cpfta_schedule()
+    row = schedule.get(code)
+    if not row:
+        return None, {"year": year_no, "raw": None, "source": "local CPFTA schedule", "found": False}
 
-    marker = re.search(r"PCT\s+Code\s+" + re.escape(code) + r"\b", text, flags=re.I)
-    if not marker:
-        return None, None
-    start = marker.start()
-    nxt = re.search(r"\bPCT\s+Code\s+\d{8}\b", text[marker.end():], flags=re.I)
-    end = marker.end() + nxt.start() if nxt else min(len(text), marker.end() + 2200)
-    row = text[start:end]
+    raw = row.get(f"Year {year_no}", "")
+    raw_clean = str(raw).strip()
+    if not raw_clean or raw_clean.lower() in {"no", "exemption", "exempt", "n/a"}:
+        return None, {
+            "year": year_no, "raw": raw_clean, "category": row.get("Category", ""),
+            "base_rate": row.get("Base Rate", ""), "source": "local CPFTA schedule", "found": True
+        }
 
-    vals = re.findall(r"Year\s+(\d{1,2})\s+([^ ]+)", row, flags=re.I)
-    table = {int(n): v for n, v in vals if int(n) <= 15}
-    raw = table.get(year_no)
-    if raw is None:
-        m = re.search(r"Year\s+1\s+", row, flags=re.I)
-        if m:
-            tail = row[m.end():]
-            candidates = []
-            for tok in re.split(r"\s+", tail):
-                if re.fullmatch(r"(?:\d+(?:\.\d+)?|no)", tok, flags=re.I):
-                    candidates.append(tok)
-                    if len(candidates) >= 15:
-                        break
-            if len(candidates) >= year_no:
-                raw = candidates[year_no - 1]
-
-    if raw is None:
-        return None, None
-    if raw.lower() in {"no", "exemption", "exempt", "n/a"}:
-        return None, {"year": year_no, "raw": raw, "source": CPFTA_SRO_URL}
     try:
-        return float(raw) / 100.0, {"year": year_no, "raw": raw, "source": CPFTA_SRO_URL}
+        rate = float(raw_clean) / 100.0
     except ValueError:
-        return None, None
+        return None, {
+            "year": year_no, "raw": raw_clean, "category": row.get("Category", ""),
+            "base_rate": row.get("Base Rate", ""), "source": "local CPFTA schedule", "found": True
+        }
 
+    return rate, {
+        "year": year_no,
+        "raw": raw_clean,
+        "category": row.get("Category", ""),
+        "base_rate": row.get("Base Rate", ""),
+        "source": "local CPFTA schedule",
+        "found": True
+    }
 
 def parse_tariff_page(html):
     soup = BeautifulSoup(html, "html.parser")
@@ -537,15 +515,16 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
             special_rates["pak_china_fta_cd"] = cpfta_rate
             special_details["pak_china_fta_cd"] = (
                 f"Current CPFTA phase-down: Year {cpfta_meta['year']} "
-                f"({cpfta_meta['raw']}%), source: FBR SRO 1640(I)/2019"
+                f"({cpfta_meta['raw']}%), source: supplied Pakistan-China FTA tariff-elimination schedule"
             )
         elif cpfta_meta is not None:
             special_rates["pak_china_fta_cd"] = None
             special_details["pak_china_fta_cd"] = "CPFTA schedule lists no preferential rate for the current year."
     except Exception as cpfta_error:
-        # Keep the TIPP result as a fallback only when the official schedule
-        # cannot be fetched; expose the limitation to the UI.
-        special_details["pak_china_fta_cd"] = (special_details.get("pak_china_fta_cd") or "") + f" | CPFTA schedule lookup warning: {cpfta_error}"
+        # Never silently fall back to an old TIPP CPFTA concession rate.
+        # The local schedule is the source of truth for the FTA checkbox.
+        special_rates["pak_china_fta_cd"] = None
+        special_details["pak_china_fta_cd"] = f"CPFTA local schedule lookup warning: {cpfta_error}"
     # TIPP often does not expose the import-stage minimum value-addition tax
     # (shown by WeBOC as Additional Sales Tax / AST). The Twelfth Schedule to
     # the Sales Tax Act, 1990 provides a 3% ad-valorem rate, subject to its

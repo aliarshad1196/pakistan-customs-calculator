@@ -2,5 +2,4 @@ Flask
 requests
 urllib3
 beautifulsoup4
-PyMuPDF
 gunicorn
