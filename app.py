@@ -90,45 +90,101 @@ def find_record_id(html, requested_code):
 
 
 def search_tipp(session, tipp_code):
-    candidates = [
-        {"Product[hscode]": tipp_code},
-        {"Product[hs_code]": tipp_code},
-        {"Product[hsCode]": tipp_code},
-        {"SearchProduct[hscode]": tipp_code},
-        {"SearchProduct[hs_code]": tipp_code},
-        {"hscode": tipp_code},
-        {"hs_code": tipp_code},
-        {"HSCode": tipp_code},
-    ]
+    # TIPP's public commodity page contains the actual search form. Instead of
+    # guessing Yii parameter names, discover the HSCODE input and submit the
+    # form exactly as the site defines it.
+    index_url = "https://www.tipp.gov.pk/index.php?r=tradeInfo/index"
 
-    last_status = "unknown"
+    try:
+        landing = session.get(index_url, timeout=30, verify=False)
+        landing.raise_for_status()
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Could not open TIPP search page: {exc}")
 
-    for params in candidates:
-        query = dict(params)
-        query["r"] = "tradeInfo/searchProduct"
+    soup = BeautifulSoup(landing.text, "html.parser")
+    forms = soup.find_all("form")
 
-        try:
-            response = session.get(
-                TIPP_BASE,
-                params=query,
-                timeout=30,
-                verify=False,
-            )
-            last_status = response.status_code
+    for form in forms:
+        inputs = form.find_all(["input", "select", "textarea"])
+        hscode_input = None
 
-            if not response.ok:
+        for element in inputs:
+            attrs = " ".join(
+                str(element.get(attr, "")) for attr in
+                ("name", "id", "placeholder", "title", "class")
+            ).lower()
+            if "hscode" in attrs or "hs code" in attrs or "hs_code" in attrs:
+                hscode_input = element
+                break
+
+        if hscode_input is None:
+            continue
+
+        payload = {}
+
+        for element in inputs:
+            name = element.get("name")
+            if not name:
                 continue
 
-            record_id = find_record_id(response.text, tipp_code)
+            tag = element.name
+
+            if tag == "select":
+                option = element.find("option", selected=True) or element.find("option")
+                if option:
+                    payload[name] = option.get("value", "")
+                continue
+
+            element_type = (element.get("type") or "").lower()
+
+            if element_type in ("submit", "button", "reset", "file"):
+                continue
+
+            if element_type in ("checkbox", "radio") and not element.has_attr("checked"):
+                continue
+
+            payload[name] = element.get("value", "")
+
+        # Override only the discovered HS-code field.
+        payload[hscode_input.get("name")] = tipp_code
+
+        action = form.get("action") or index_url
+        action = requests.compat.urljoin(index_url, action)
+        method = (form.get("method") or "get").lower()
+
+        try:
+            if method == "post":
+                result = session.post(
+                    action, data=payload, timeout=30, verify=False
+                )
+            else:
+                result = session.get(
+                    action, params=payload, timeout=30, verify=False
+                )
+
+            if not result.ok:
+                continue
+
+            record_id = find_record_id(result.text, tipp_code)
             if record_id:
                 return record_id
+
+            # Some Yii pages return the commodity result as a link even when
+            # the exact code is formatted differently.
+            normalized_page = re.sub(r"[^0-9]", "", result.text)
+            if tipp_code in normalized_page:
+                record_id = find_record_id(result.text, tipp_code)
+                if record_id:
+                    return record_id
 
         except requests.RequestException:
             continue
 
+    # Fallback: TIPP's search-product endpoint may expose the code even if the
+    # landing-page form changes. We deliberately do not trust malformed id= links.
     raise RuntimeError(
-        f"TIPP search did not expose a valid commodity record for {tipp_code}. "
-        f"Last HTTP status: {last_status}."
+        f"TIPP returned HTTP 200 but did not expose a valid commodity record ID "
+        f"for {tipp_code}. The TIPP search form may have changed."
     )
 
 
