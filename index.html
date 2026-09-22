@@ -33,25 +33,6 @@ small{color:#667085}
 <div id="status" class="status"></div>
 <div id="commodity"></div>
 <div class="status" style="margin-top:12px">TIPP rates are loaded automatically, but you can edit any rate manually.</div>
-<div style="margin-top:14px;border:1px solid #e4e7ec;border-radius:12px;padding:12px;background:#fafafa">
-<b>Income Tax / Section 148 Profile</b>
-<label>Importer Type</label>
-<select id="importerType" onchange="refreshITRule()" style="width:100%;padding:13px;border:1px solid #d0d5dd;border-radius:10px;font-size:16px">
-<option value="commercial">Commercial Importer</option>
-<option value="industrial">Industrial Undertaking</option>
-<option value="ship_breaker">Ship Breaker</option>
-<option value="auto">Let TIPP/statutory rule decide</option>
-</select>
-<label>Twelfth Schedule IT Category</label>
-<select id="schedulePart" onchange="refreshITRule()" style="width:100%;padding:13px;border:1px solid #d0d5dd;border-radius:10px;font-size:16px">
-<option value="auto">Auto-detect</option>
-<option value="i">Part I</option>
-<option value="ii">Part II</option>
-<option value="iii">Part III</option>
-</select>
-<label style="display:flex;align-items:center;gap:9px;font-weight:700;cursor:pointer"><input id="atl" type="checkbox" checked style="width:auto" onchange="refreshITRule()"> Active Taxpayers List (ATL)</label>
-<div id="itRuleInfo" class="status">For PCT 7204.4990 the current Twelfth Schedule classification is Part II: 2% industrial / 3.5% commercial.</div>
-</div>
 <div id="rates" class="rates"></div>
 <div id="astInfo" class="status" style="margin-top:10px"></div>
 <div id="options" style="margin-top:14px;display:none">
@@ -71,8 +52,8 @@ small{color:#667085}
 </details>
 <label style="display:flex;align-items:center;gap:9px;font-weight:700;cursor:pointer"><input id="fta" type="checkbox" style="width:auto" onchange="applyOptions()"> Apply Pak-China FTA (CD) rate</label>
 <div id="ftaInfo" class="status"></div>
-<label style="display:flex;align-items:center;gap:9px;font-weight:700;cursor:pointer"><input id="itExemption" type="checkbox" style="width:auto" onchange="applyOptions()"> Use Income Tax Exemption under First Schedule II</label>
-<div id="itInfo" class="status"></div>
+<label style="display:flex;align-items:center;gap:9px;font-weight:700;cursor:pointer;margin-top:12px"><input id="incomeTaxCommercial" type="checkbox" style="width:auto" onchange="applyOptions()"> Income Tax Commercial importer</label>
+<div id="incomeTaxInfo" class="status"></div>
 </div>
 </div>
 
@@ -116,30 +97,25 @@ async function fetchTariff(){
  if(!hs){status.textContent='Enter an HS/PCT code.';return}
  status.textContent='Fetching current TIPP tariff…';
  try{
-   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts(),importer_type:document.getElementById('importerType').value,schedule_part:document.getElementById('schedulePart').value,atl:document.getElementById('atl').checked?'1':'0'}).toString());
+   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}).toString());
    const d=await readApiResponse(r);
    rates.cd=Number(d.rates.cd||0); rates.acd=Number(d.rates.acd||0);
    rates.rd=Number(d.rates.rd||0); rates.st=Number(d.rates.st||0);
    rates.ast=Number(d.rates.ast||0); rates.it=Number(d.rates.it||0);
    astSource=d.ast_source||astSource;
    Object.assign(tippRates,rates);
-   window.incomeTaxRule=d.income_tax_rule||null;
    specialRates.pak_china_fta_cd=d.special_rates?.pak_china_fta_cd ?? null;
    specialRates.income_tax_exemption_first_schedule_ii=d.special_rates?.income_tax_exemption_first_schedule_ii ?? null;
    document.getElementById('commodity').innerHTML='<p><b>'+ (d.code||hs) +'</b> — '+(d.description||'')+'</p>';
    document.getElementById('rates').innerHTML=
     [['CD','cd'],['ACD','acd'],['RD','rd'],['ST','st'],['AST','ast'],['IT','it']]
-    .map(x=>'<div class="rate"><b>'+x[0]+' Rate (%)</b><input id="rate_'+x[1]+'" type="number" min="0" step="0.01" value="'+(Number(rates[x[1]])*100)+'" oninput="syncManualRate(\''+x[1]+'\')"><small>'+ (x[1]==='ast' ? 'Editable • '+astSource.name+': '+pct(rates[x[1]]) : x[1]==='it' && window.incomeTaxRule ? 'Editable • '+window.incomeTaxRule.rule+': '+pct(rates[x[1]]) : 'Editable • TIPP: '+pct(rates[x[1]])) +'</small></div>').join('');
+    .map(x=>'<div class="rate"><b>'+x[0]+' Rate (%)</b><input id="rate_'+x[1]+'" type="number" min="0" step="0.01" value="'+(Number(rates[x[1]])*100)+'" oninput="syncManualRate(\''+x[1]+'\')"><small>'+ (x[1]==='ast' ? 'Editable • '+astSource.name+': '+pct(rates[x[1]]) : 'Editable • TIPP: '+pct(rates[x[1]])) +'</small></div>').join('');
    document.getElementById('options').style.display='block';
    const astNote=document.getElementById('astInfo');
    if(astNote) astNote.innerHTML='<b>AST rule:</b> '+astSource.name+' — '+astSource.note;
-   updateITRuleInfo();
    const ftaBox=document.getElementById('fta');
-   const itBox=document.getElementById('itExemption');
    ftaBox.disabled=specialRates.pak_china_fta_cd===null;
-   itBox.disabled=specialRates.income_tax_exemption_first_schedule_ii===null;
    document.getElementById('ftaInfo').textContent = specialRates.pak_china_fta_cd===null ? 'Current CPFTA rate is not listed for this HS code.' : ((d.special_details?.pak_china_fta_cd||'Current CPFTA phase-down rate')+' — '+pct(specialRates.pak_china_fta_cd));
-   document.getElementById('itInfo').textContent = specialRates.income_tax_exemption_first_schedule_ii===null ? 'Income Tax Exemption under First Schedule II is not listed for this HS code.' : 'TIPP Income Tax Exemption: '+pct(specialRates.income_tax_exemption_first_schedule_ii);
    applyOptions();
    const nc=d.non_core||{};
    const groups=[];
@@ -185,28 +161,6 @@ async function refreshASTRule(){
   calc();
  }catch(e){ if(status) status.textContent='AST rule error: '+e.message; }
 }
-function updateITRuleInfo(){
- const el=document.getElementById('itRuleInfo');
- if(!el || !window.incomeTaxRule) return;
- const r=window.incomeTaxRule;
- el.innerHTML='<b>IT rule:</b> '+r.rule+' — '+r.note+(r.part&&r.part!=='unknown'?' <b>Category:</b> Part '+r.part.toUpperCase()+'.':'');
-}
-async function refreshITRule(){
- const hs=cleanHS(document.getElementById('hs').value);
- if(!hs) return;
- try{
-  const params=new URLSearchParams({hs,importer_type:document.getElementById('importerType').value,schedule_part:document.getElementById('schedulePart').value,atl:document.getElementById('atl').checked?'1':'0'});
-  const r=await fetch('/api/income-tax?'+params.toString());
-  const d=await r.json();
-  if(!r.ok) throw new Error(d.error||'Income tax rule lookup failed');
-  window.incomeTaxRule=d.income_tax_rule||null;
-  if(window.incomeTaxRule && window.incomeTaxRule.rate!==null && !document.getElementById('itExemption').checked){
-    setRateInput('it',window.incomeTaxRule.rate);
-  }
-  updateITRuleInfo();
-  calc();
- }catch(e){ const el=document.getElementById('itRuleInfo'); if(el) el.textContent='Income tax rule error: '+e.message; }
-}
 function syncManualRate(key){
  const el=document.getElementById('rate_'+key);
  if(el) rates[key]=Math.max(0,Number(el.value||0))/100;
@@ -219,7 +173,6 @@ function setRateInput(key,value){
 }
 function applyOptions(){
  const fta=document.getElementById('fta');
- const itBox=document.getElementById('itExemption');
  if(fta && fta.checked && specialRates.pak_china_fta_cd!==null){
    setRateInput('cd',specialRates.pak_china_fta_cd);
    document.getElementById('ftaInfo').textContent='Applied current CPFTA rate: '+pct(specialRates.pak_china_fta_cd);
@@ -227,12 +180,14 @@ function applyOptions(){
    setRateInput('cd',tippRates.cd);
    document.getElementById('ftaInfo').textContent='Current CPFTA rate: '+pct(specialRates.pak_china_fta_cd);
  }
+ const itBox=document.getElementById('incomeTaxCommercial');
+ const itInfo=document.getElementById('incomeTaxInfo');
  if(itBox && itBox.checked && specialRates.income_tax_exemption_first_schedule_ii!==null){
    setRateInput('it',specialRates.income_tax_exemption_first_schedule_ii);
-   document.getElementById('itInfo').textContent='Applied Income Tax Exemption: '+pct(specialRates.income_tax_exemption_first_schedule_ii);
- } else if(itBox && !itBox.disabled){
-   setRateInput('it',window.incomeTaxRule && window.incomeTaxRule.rate!==null ? window.incomeTaxRule.rate : tippRates.it);
-   document.getElementById('itInfo').textContent=window.incomeTaxRule && window.incomeTaxRule.rate!==null ? ('Applied Section 148 rule: '+pct(window.incomeTaxRule.rate)) : 'TIPP statutory IT: '+pct(tippRates.it);
+   if(itInfo) itInfo.textContent='Applied First Schedule II commercial-importer rate: '+pct(specialRates.income_tax_exemption_first_schedule_ii);
+ } else if(itInfo){
+   setRateInput('it',tippRates.it);
+   itInfo.textContent='TIPP IT rate: '+pct(tippRates.it);
  }
  calc();
 }
