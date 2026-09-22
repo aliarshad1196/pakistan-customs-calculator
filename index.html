@@ -31,7 +31,7 @@ button.secondary{background:#edf4ff;color:#1259c4;box-shadow:none;border:1px sol
 #commodity p{margin:0}
 .rates{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}
 .rate{background:linear-gradient(180deg,#fbfdff,#f5f8fc);padding:11px;border-radius:14px;border:1px solid var(--line)}
-.rate b{display:block;font-size:11px;color:#526277;margin-bottom:6px;letter-spacing:.2px}
+.rate b{display:block;font-size:11px;color:#526277;margin-bottom:6px;letter-spacing:.2px}.rate-head{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:6px}.rate-head b{margin:0}.rate-option{display:flex;align-items:center;gap:5px;font-size:10px;font-weight:800;color:#526277;white-space:nowrap;cursor:pointer}.rate-option input{width:15px;height:15px;padding:0;margin:0;accent-color:var(--blue);flex:0 0 auto}.ast-toggle{border:1px solid #d7e2ef;background:#fff;color:#31506f;border-radius:8px;padding:4px 7px;font-size:10px;font-weight:800;cursor:pointer;box-shadow:none;margin:0}.ast-toggle:hover{transform:none;box-shadow:none}.gst-toggle{width:auto;margin:0;padding:7px 11px;border-radius:9px;font-size:11px;box-shadow:none;background:#edf4ff;color:#1259c4;border:1px solid #d7e6fb}.gst-toggle.active{background:var(--green);color:#fff;border-color:var(--green)}
 .rate input{padding:10px 9px;font-size:16px;font-weight:800;background:#fff}
 .options-card{margin-top:16px;padding-top:16px;border-top:1px solid #edf1f5}
 .option-row{display:flex;align-items:center;gap:10px;padding:11px 12px;border:1px solid var(--line);border-radius:12px;background:#fbfcfe;margin-top:10px;cursor:pointer}
@@ -75,10 +75,9 @@ details[open] summary:after{content:"−"}
 <div class="section-head" style="margin-top:18px;margin-bottom:0"><h2 style="font-size:15px">Duty & Tax Rates</h2><span class="section-note">Editable</span></div>
 <div id="rates" class="rates"></div>
 <div id="options" class="options-card" style="display:none">
-<details style="margin-bottom:12px">
+<details id="astDetails">
 <summary>Twelfth Schedule / AST conditions</summary>
 <div class="ast-body">
-<p class="ast-help">Leave all unchecked for the normal commercial-importer case. Select a condition only when it genuinely applies; the AST rule will update automatically.</p>
 <label class="check-label"><input id="manufacturerRaw" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Manufacturer: raw materials/intermediary goods for in-house consumption (not supplied in the same state)</label>
 <label class="check-label"><input id="serviceProvider" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Registered service provider: goods for in-house taxable business use, not for further supply</label>
 <label class="check-label"><input id="licensedOMC" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Licensed Oil Marketing Company: qualifying Chapter 27 petroleum products for sale in Pakistan</label>
@@ -90,8 +89,6 @@ details[open] summary:after{content:"−"}
 <label class="check-label"><input id="coalIPP" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Coal imported exclusively/directly for supply to Independent Power Producers (IPP)</label>
 </div>
 </details>
-<label class="option-row"><input id="fta" type="checkbox" style="width:auto" onchange="applyOptions()"> Apply Pak-China FTA (CD) rate</label>
-<label class="option-row"><input id="incomeTaxCommercial" type="checkbox" style="width:auto" onchange="applyOptions()"> Income Tax Commercial importer</label>
 </div>
 </div>
 
@@ -106,7 +103,7 @@ details[open] summary:after{content:"−"}
 </div>
 
 <div class="card">
-<div class="section-head"><h2>Duty & Tax Breakdown</h2><span class="section-note">Calculated instantly</span></div>
+<div class="section-head"><h2>Duty & Tax Breakdown</h2><button id="gstToggle" class="gst-toggle" type="button" onclick="toggleGST()">Use GST</button></div>
 <div id="breakdown"><small>Enter values and fetch tariff rates.</small></div>
 </div>
 </div>
@@ -116,6 +113,7 @@ const rates={cd:0,acd:0,rd:0,st:0,ast:0,it:0};
 const tippRates={cd:0,acd:0,rd:0,st:0,ast:0,it:0};
 let specialRates={pak_china_fta_cd:null,income_tax_exemption_first_schedule_ii:null};
 let astSource={rate:0.03,name:'Twelfth Schedule — 3% value-addition tax',note:'3% applies by default to taxable imports; statutory exclusions may depend on importer/use facts.',status:'default'};
+let gstMode=false;
 const money=n=>Number(n||0).toLocaleString('en-PK',{maximumFractionDigits:2});
 function pct(x){return (Number(x||0)*100).toFixed(2)+'%'}
 function cleanHS(v){return String(v).replace(/[^0-9]/g,'')}
@@ -147,7 +145,13 @@ async function fetchTariff(){
    document.getElementById('commodity').innerHTML='<p><b>'+ (d.code||hs) +'</b> — '+(d.description||'')+'</p>';
    document.getElementById('rates').innerHTML=
     [['CD','cd'],['ACD','acd'],['RD','rd'],['ST','st'],['AST','ast'],['IT','it']]
-    .map(x=>'<div class="rate"><b>'+x[0]+' Rate (%)</b><input id="rate_'+x[1]+'" type="number" min="0" step="0.01" value="'+(Number(rates[x[1]])*100)+'" oninput="syncManualRate(\''+x[1]+'\')"></div>').join('');
+    .map(x=>{
+      let extra='';
+      if(x[1]==='cd') extra='<label class="rate-option"><input id="fta" type="checkbox" onchange="applyOptions()"> FTA</label>';
+      if(x[1]==='ast') extra='<button class="ast-toggle" type="button" onclick="toggleAST()">AST ▾</button>';
+      if(x[1]==='it') extra='<label class="rate-option"><input id="incomeTaxCommercial" type="checkbox" onchange="applyOptions()"> Commercial</label>';
+      return '<div class="rate"><div class="rate-head"><b>'+x[0]+' Rate (%)</b>'+extra+'</div><input id="rate_'+x[1]+'" type="number" min="0" step="0.01" value="'+(Number(rates[x[1]])*100)+'" oninput="syncManualRate(\''+x[1]+'\')"></div>';
+    }).join('');
    document.getElementById('options').style.display='block';
    const ftaBox=document.getElementById('fta');
    ftaBox.disabled=specialRates.pak_china_fta_cd===null;
@@ -189,7 +193,7 @@ async function refreshASTRule(){
   astSource=d.ast_source||astSource;
   setRateInput('ast',astSource.rate);
   const astInput=document.getElementById('rate_ast');
-  if(astInput) astInput.value=(Number(astSource.rate||0)*100).toString();
+  if(astInput) astInput.value=(gstMode?0:Number(astSource.rate||0)*100).toString();
   calc();
  }catch(e){ if(status) status.textContent='Error: '+e.message; }
 }
@@ -218,6 +222,18 @@ function applyOptions(){
  }
  calc();
 }
+function toggleAST(){
+ const d=document.getElementById('astDetails');
+ if(d) d.open=!d.open;
+}
+function toggleGST(){
+ gstMode=!gstMode;
+ const astInput=document.getElementById('rate_ast');
+ if(astInput) astInput.value=(gstMode?0:Number(rates.ast||0)*100).toString();
+ const b=document.getElementById('gstToggle');
+ if(b){b.textContent=gstMode?'GST Applied':'Use GST';b.classList.toggle('active',gstMode);}
+ calc();
+}
 function calc(){
  const q=Number(document.getElementById('qty').value||0);
  const p=Number(document.getElementById('price').value||0);
@@ -226,10 +242,12 @@ function calc(){
  const cd=cv*rates.cd, acd=cv*rates.acd, rd=cv*rates.rd;
  const effectiveIt=rates.it;
  const st=(cv+cd+acd+rd)*rates.st;
- const ast=(cv+cd+acd+rd)*rates.ast;
- const it=(cv+cd+rd+acd+ast+st)*effectiveIt;
- const total=cd+acd+rd+st+ast+it;
- const rows=[['Customs Value (CV)',cv],['CD',cd],['ACD',acd],['RD',rd],['ST',st],['AST',ast],['IT',it],['Total Duties & Taxes',total]];
+ const ast=gstMode?0:(cv+cd+acd+rd)*rates.ast;
+ const gst=gstMode?st*0.39:0;
+ const itBase=cv+cd+acd+rd+st+(gstMode?gst:ast);
+ const it=itBase*effectiveIt;
+ const total=cd+acd+rd+st+ast+gst+it;
+ const rows=[['Customs Value (CV)',cv],['CD',cd],['ACD',acd],['RD',rd],['ST',st],['AST',ast],...(gstMode?[['GST',gst]]:[]),['IT',it],['Total Duties & Taxes',total]];
  document.getElementById('breakdown').innerHTML=rows.map((r,i)=>'<div class="result '+(i>=7?'total':'')+'"><span>'+r[0]+'</span><b>'+money(r[1])+'</b></div>').join('');
 }
 </script>
