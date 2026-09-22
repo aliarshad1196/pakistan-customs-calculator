@@ -33,6 +33,12 @@ small{color:#667085}
 <div id="status" class="status"></div>
 <div id="commodity"></div>
 <div id="rates" class="rates"></div>
+<div id="options" style="margin-top:14px;display:none">
+<label style="display:flex;align-items:center;gap:9px;font-weight:700;cursor:pointer"><input id="fta" type="checkbox" style="width:auto" onchange="applyOptions()"> Apply Pak-China FTA (CD) rate</label>
+<div id="ftaInfo" class="status"></div>
+<label style="display:flex;align-items:center;gap:9px;font-weight:700;cursor:pointer"><input id="itExemption" type="checkbox" style="width:auto" onchange="applyOptions()"> Use Income Tax Exemption under First Schedule II</label>
+<div id="itInfo" class="status"></div>
+</div>
 </div>
 
 <div class="card">
@@ -53,6 +59,7 @@ small{color:#667085}
 
 <script>
 const rates={cd:0,acd:0,rd:0,st:0,ast:0,it:0};
+let specialRates={pak_china_fta_cd:null,income_tax_exemption_first_schedule_ii:null};
 const money=n=>Number(n||0).toLocaleString('en-PK',{maximumFractionDigits:2});
 function pct(x){return (Number(x||0)*100).toFixed(2)+'%'}
 function cleanHS(v){return String(v).replace(/[^0-9]/g,'')}
@@ -68,10 +75,20 @@ async function fetchTariff(){
    rates.cd=Number(d.rates.cd||0); rates.acd=Number(d.rates.acd||0);
    rates.rd=Number(d.rates.rd||0); rates.st=Number(d.rates.st||0);
    rates.ast=Number(d.rates.ast||0); rates.it=Number(d.rates.it||0);
+   specialRates.pak_china_fta_cd=d.special_rates?.pak_china_fta_cd ?? null;
+   specialRates.income_tax_exemption_first_schedule_ii=d.special_rates?.income_tax_exemption_first_schedule_ii ?? null;
    document.getElementById('commodity').innerHTML='<p><b>'+ (d.code||hs) +'</b> — '+(d.description||'')+'</p>';
    document.getElementById('rates').innerHTML=
-    [['CD',rates.cd],['ACD',rates.acd],['RD',rates.rd],['ST',rates.st],['AST',rates.ast],['IT',rates.it]]
+    [['CD (TIPP)',rates.cd],['ACD',rates.acd],['RD',rates.rd],['ST',rates.st],['AST',rates.ast],['IT (TIPP)',rates.it]]
     .map(x=>'<div class="rate"><b>'+x[0]+'</b><span>'+pct(x[1])+'</span></div>').join('');
+   document.getElementById('options').style.display='block';
+   const ftaBox=document.getElementById('fta');
+   const itBox=document.getElementById('itExemption');
+   ftaBox.disabled=specialRates.pak_china_fta_cd===null;
+   itBox.disabled=specialRates.income_tax_exemption_first_schedule_ii===null;
+   document.getElementById('ftaInfo').textContent = specialRates.pak_china_fta_cd===null ? 'Pak-China FTA (CD) is not listed for this HS code.' : 'TIPP Pak-China FTA (CD): '+pct(specialRates.pak_china_fta_cd);
+   document.getElementById('itInfo').textContent = specialRates.income_tax_exemption_first_schedule_ii===null ? 'Income Tax Exemption under First Schedule II is not listed for this HS code.' : 'TIPP Income Tax Exemption: '+pct(specialRates.income_tax_exemption_first_schedule_ii);
+   applyOptions();
    const nc=d.non_core||{};
    const groups=[];
    if((nc.concessions||[]).length) groups.push('<b>Concessions</b><br>'+nc.concessions.join('<br>'));
@@ -83,15 +100,32 @@ async function fetchTariff(){
    calc();
  }catch(e){status.textContent='Error: '+e.message}
 }
+function applyOptions(){
+ const fta=document.getElementById('fta');
+ const itBox=document.getElementById('itExemption');
+ if(fta && fta.checked && specialRates.pak_china_fta_cd!==null){
+   document.getElementById('ftaInfo').textContent='Applied Pak-China FTA (CD): '+pct(specialRates.pak_china_fta_cd);
+ } else if(fta && !fta.disabled){
+   document.getElementById('ftaInfo').textContent='TIPP Pak-China FTA (CD): '+pct(specialRates.pak_china_fta_cd);
+ }
+ if(itBox && itBox.checked && specialRates.income_tax_exemption_first_schedule_ii!==null){
+   document.getElementById('itInfo').textContent='Applied Income Tax Exemption: '+pct(specialRates.income_tax_exemption_first_schedule_ii);
+ } else if(itBox && !itBox.disabled){
+   document.getElementById('itInfo').textContent='TIPP Income Tax Exemption: '+pct(specialRates.income_tax_exemption_first_schedule_ii);
+ }
+ calc();
+}
 function calc(){
  const q=Number(document.getElementById('qty').value||0);
  const p=Number(document.getElementById('price').value||0);
  const fx=Number(document.getElementById('fx').value||0);
  const cv=q*p*fx;
- const cd=cv*rates.cd, acd=cv*rates.acd, rd=cv*rates.rd;
+ const effectiveCd=(document.getElementById('fta')?.checked && specialRates.pak_china_fta_cd!==null) ? specialRates.pak_china_fta_cd : rates.cd;
+ const effectiveIt=(document.getElementById('itExemption')?.checked && specialRates.income_tax_exemption_first_schedule_ii!==null) ? specialRates.income_tax_exemption_first_schedule_ii : rates.it;
+ const cd=cv*effectiveCd, acd=cv*rates.acd, rd=cv*rates.rd;
  const st=(cv+cd+rd)*rates.st;
  const ast=(cv+cd+rd)*rates.ast;
- const it=(cv+cd+rd+acd+ast+st)*rates.it;
+ const it=(cv+cd+rd+acd+ast+st)*effectiveIt;
  const total=cd+acd+rd+st+ast+it;
  const landed=cv+total;
  const rows=[['Customs Value (CV)',cv],['CD',cd],['ACD',acd],['RD',rd],['ST',st],['AST',ast],['IT',it],['Total Duties & Taxes',total],['Total Landed Value',landed]];

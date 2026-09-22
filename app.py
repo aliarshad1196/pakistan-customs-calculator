@@ -174,6 +174,8 @@ def parse_tariff_page(html):
 
     rates = {"cd": 0.0, "acd": 0.0, "rd": 0.0, "st": 0.0, "ast": 0.0, "it": 0.0}
     non_core = {"concessions": [], "exemptions": [], "provincial_cess": []}
+    special_rates = {"pak_china_fta_cd": None, "income_tax_exemption_first_schedule_ii": None}
+    special_details = {"pak_china_fta_cd": None, "income_tax_exemption_first_schedule_ii": None}
     validity = []
 
     tables = soup.find_all("table")
@@ -218,7 +220,14 @@ def parse_tariff_page(html):
                 cells = [clean_text(c.get_text(" ", strip=True)) for c in row.find_all(["th", "td"])]
                 if cells:
                     row_text = " | ".join(cells)
-                    if "concession" in row_text.lower():
+                    lower_row = row_text.lower()
+                    if "pak-china fta (cd)" in lower_row:
+                        special_rates["pak_china_fta_cd"] = parse_rate(row_text)
+                        special_details["pak_china_fta_cd"] = row_text
+                    if "income tax exemption under first scheduleii" in lower_row:
+                        special_rates["income_tax_exemption_first_schedule_ii"] = parse_rate(row_text)
+                        special_details["income_tax_exemption_first_schedule_ii"] = row_text
+                    if "concession" in lower_row:
                         non_core["concessions"].append(row_text)
                     else:
                         non_core["exemptions"].append(row_text)
@@ -226,7 +235,7 @@ def parse_tariff_page(html):
     for key in non_core:
         non_core[key] = list(dict.fromkeys(x for x in non_core[key] if x))
 
-    return rates, non_core, list(dict.fromkeys(validity))
+    return rates, non_core, list(dict.fromkeys(validity)), special_rates, special_details
 
 
 def lookup(hs):
@@ -253,7 +262,7 @@ def lookup(hs):
         )
 
     soup = BeautifulSoup(response.text, "html.parser")
-    rates, non_core, validity = parse_tariff_page(response.text)
+    rates, non_core, validity, special_rates, special_details = parse_tariff_page(response.text)
     description = extract_commodity_info(soup, tipp_code)
 
     return {
@@ -263,6 +272,8 @@ def lookup(hs):
         "description": description,
         "rates": rates,
         "non_core": non_core,
+        "special_rates": special_rates,
+        "special_details": special_details,
         "validity": "; ".join(validity),
         "source_url": commodity_url,
         "resolution": resolution,
