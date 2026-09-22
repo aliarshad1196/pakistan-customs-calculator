@@ -13,6 +13,20 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__, static_folder=".")
 
+# Always return JSON for API failures. This prevents the browser from trying
+# to JSON.parse an HTML Flask/Render error page.
+@app.errorhandler(404)
+def api_404(error):
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "API endpoint not found", "path": request.path}), 404
+    return error
+
+@app.errorhandler(500)
+def api_500(error):
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Internal server error", "detail": str(error)}), 500
+    return error
+
 TIPP_BASE = "https://www.tipp.gov.pk/index.php"
 
 # Official FBR CPFTA Phase-II tariff schedule (SRO 1640(I)/2019),
