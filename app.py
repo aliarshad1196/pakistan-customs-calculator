@@ -1,9 +1,12 @@
 from flask import Flask, request, jsonify, send_from_directory
 import re
+import os
+import datetime
 from urllib.parse import quote_plus
 import requests
 import urllib3
 from bs4 import BeautifulSoup
+from pypdf import PdfReader
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -197,6 +200,85 @@ def table_headers(table):
     return [clean_text(c.get_text(" ", strip=True)).lower() for c in header_row.find_all(["th", "td"])]
 
 
+def _download_cpfta_text(session):
+    """Download/cache the official CPFTA tariff schedule and return normalized text."""
+    if os.path.exists(CPFTA_TEXT_CACHE):
+        try:
+            return Path(CPFTA_TEXT_CACHE).read_text(encoding="utf-8")
+        except Exception:
+            pass
+    if not os.path.exists(CPFTA_CACHE):
+        r = session.get(CPFTA_SRO_URL, timeout=60, verify=False)
+        r.raise_for_status()
+        with open(CPFTA_CACHE, "wb") as f:
+            f.write(r.content)
+    reader = PdfReader(CPFTA_CACHE)
+    parts = []
+    for page in reader.pages:
+        try:
+            parts.append(page.extract_text() or "")
+        except Exception:
+            continue
+    text = re.sub(r"\\s+", " ", " ".join(parts)).strip()
+    try:
+        Path(CPFTA_TEXT_CACHE).write_text(text, encoding="utf-8")
+    except Exception:
+        pass
+    return text
+
+
+def cpfta_current_rate(hs8, session):
+    """Return the current CPFTA preferential CD rate for an 8-digit PCT.
+
+    SRO 1640(I)/2019 contains a 15-year phase-down beginning 1-Jan-2020.
+    Year 7 therefore applies during calendar year 2026.  The function parses
+    the official FBR schedule rather than using stale TIPP concession rows.
+    """
+    code = re.sub(r"[^0-9]", "", hs8)[:8]
+    if len(code) != 8:
+        return None, None
+    today = datetime.date.today()
+    if today < datetime.date(2020, 1, 1):
+        return None, None
+    year_no = today.year - 2020 + 1
+    if year_no < 1 or year_no > 15:
+        return None, None
+    text = _download_cpfta_text(session)
+    marker = re.search(r"PCT Code\\s+" + re.escape(code) + r"\\b", text, flags=re.I)
+    if not marker:
+        return None, None
+    start = marker.start()
+    nxt = re.search(r"\\bPCT Code\\s+\\d{8}\\b", text[marker.end():], flags=re.I)
+    end = marker.end() + nxt.start() if nxt else min(len(text), marker.end() + 1800)
+    row = text[start:end]
+    vals = re.findall(r"Year\\s+(\\d{1,2})\\s+([^ ]+)", row, flags=re.I)
+    table = {int(n): v for n, v in vals if int(n) <= 15}
+    raw = table.get(year_no)
+    if raw is None:
+        # Some PDF extraction layouts omit the repeated 'Year N' labels.
+        # Fall back to the ordered values following Year 1.
+        m = re.search(r"Year\\s+1\\s+", row, flags=re.I)
+        if m:
+            tail = row[m.end():]
+            tokens = re.split(r"\\s+", tail)
+            candidates = []
+            for tok in tokens:
+                if re.fullmatch(r"(?:\\d+(?:\\.\\d+)?|no)", tok, flags=re.I):
+                    candidates.append(tok)
+                    if len(candidates) >= 15:
+                        break
+            if len(candidates) >= year_no:
+                raw = candidates[year_no - 1]
+    if raw is None:
+        return None, None
+    if raw.lower() in {"no", "exemption", "exempt", "n/a"}:
+        return None, {"year": year_no, "raw": raw, "source": CPFTA_SRO_URL}
+    try:
+        return float(raw) / 100.0, {"year": year_no, "raw": raw, "source": CPFTA_SRO_URL}
+    except ValueError:
+        return None, None
+
+
 def parse_tariff_page(html):
     soup = BeautifulSoup(html, "html.parser")
 
@@ -324,7 +406,66 @@ def twelfth_schedule_ast_rule(hs8, facts=None):
 
     return {"rate": 0.03, "status": "default", "rule": "Twelfth Schedule — 3% value-addition tax", "note": "3% default applies because no statutory exclusion/special-rate condition was selected."}
 
-def lookup(hs, facts=None):
+
+def income_tax_rule(hs8, importer_type='auto', schedule_part='auto', atl=True, facts=None):
+    """Determine section 148 import-stage income-tax rate from the current
+    First Schedule / Twelfth Schedule framework (ITO amended to 30-Jun-2026).
+
+    The full Twelfth Schedule classification is large and changes by law/SRO.
+    This layer therefore uses confirmed schedule mappings where available and
+    lets the user explicitly select Part I/II/III when a PCT cannot be mapped
+    automatically.
+    """
+    code=re.sub(r"[^0-9]", "", hs8)
+    importer=(importer_type or 'auto').lower()
+    part=(schedule_part or 'auto').lower()
+    notes=[]
+
+    # Confirmed current mapping: PCT 72.04 is in Part II of the Twelfth
+    # Schedule. This is also the category shown by WeBOC for 7204.4990.
+    if part=='auto' and (code.startswith('72') and code[:4]=='7204'):
+        part='ii'
+        notes.append('PCT 72.04 mapped to Twelfth Schedule Part II')
+
+    # Explicit special cases in the current First Schedule Part II.
+    if code.startswith('39') and importer=='industrial':
+        return {'rate':0.0175,'category':'special','rule':'First Schedule Part II — plastic raw material PCT 39.01–39.12 for own use','note':'Special rate 1.75% for qualifying industrial undertaking importing plastic raw material for its own use.','part':part}
+    if code.startswith('39') and importer=='commercial':
+        return {'rate':0.045,'category':'special','rule':'First Schedule Part II — plastic raw material PCT 39.01–39.12','note':'Special rate 4.5% for qualifying commercial importer of plastic raw material.','part':part}
+
+    if code.startswith('2701'):
+        return {'rate':0.04,'category':'special','rule':'First Schedule Part II — coal','note':'Coal imports are subject to the 4% section 148 rate under the current First Schedule.','part':part}
+
+    if importer=='ship_breaker':
+        return {'rate':0.045,'category':'special','rule':'First Schedule Part II — ship breaker importing ships','note':'Special 4.5% rate for ship breakers on import of ships.','part':part}
+
+    if part=='i':
+        return {'rate':0.01,'category':'part_i','rule':'First Schedule Part II — Twelfth Schedule Part I','note':'1% import-stage income tax for goods classified in Part I.','part':'i'}
+    if part=='ii':
+        if importer=='commercial':
+            return {'rate':0.035,'category':'part_ii_commercial','rule':'First Schedule Part II — Twelfth Schedule Part II, commercial importer','note':'3.5% for commercial importers of Part II goods.','part':'ii'}
+        if importer=='industrial':
+            return {'rate':0.02,'category':'part_ii_industrial','rule':'First Schedule Part II — Twelfth Schedule Part II, industrial undertaking','note':'2% for industrial undertakings importing Part II goods.','part':'ii'}
+        return {'rate':0.02,'category':'part_ii_default','rule':'First Schedule Part II — Twelfth Schedule Part II','note':'2% statutory Part II rate; choose importer type to apply the commercial 3.5% rate where applicable.','part':'ii'}
+    if part=='iii':
+        if importer=='commercial':
+            return {'rate':0.06,'category':'part_iii_commercial','rule':'First Schedule Part II — Twelfth Schedule Part III, commercial importer','note':'6% for commercial importers of Part III goods.','part':'iii'}
+        return {'rate':0.055,'category':'part_iii','rule':'First Schedule Part II — Twelfth Schedule Part III','note':'5.5% for Part III goods; commercial importers are 6%.','part':'iii'}
+
+    return {'rate':None,'category':'unknown','rule':'TIPP statutory IT rate retained','note':'Twelfth Schedule Part could not be mapped automatically. Select Part I, II or III and importer type if you want the statutory section 148 rule to override TIPP.','part':'unknown'}
+
+
+def apply_atl_adjustment(rule, atl=True):
+    if rule is None or rule.get('rate') is None or atl:
+        return rule
+    out=dict(rule)
+    out['rate']=float(rule['rate'])*2
+    out['note']=rule.get('note','')+' ATL inactive/non-ATL treatment: rate doubled where the 100% increase applies.'
+    out['rule']=rule.get('rule','')+' + non-ATL 100% increase'
+    out['status']='non_atl_adjusted'
+    return out
+
+def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True):
     hs8, tipp_code = normalize_hs(hs)
 
     session = requests.Session()
@@ -349,6 +490,25 @@ def lookup(hs, facts=None):
 
     soup = BeautifulSoup(response.text, "html.parser")
     rates, non_core, validity, special_rates, special_details = parse_tariff_page(response.text)
+    # TIPP can retain historical CPFTA concession rows after their validity
+    # period. For Pak-China FTA, use the current official phase-down schedule
+    # in FBR SRO 1640(I)/2019. This is what makes 9503.0090 resolve to 10.67%
+    # in 2026 instead of the stale 14.67% TIPP row from 2023.
+    try:
+        cpfta_rate, cpfta_meta = cpfta_current_rate(hs8, session)
+        if cpfta_rate is not None:
+            special_rates["pak_china_fta_cd"] = cpfta_rate
+            special_details["pak_china_fta_cd"] = (
+                f"Current CPFTA phase-down: Year {cpfta_meta['year']} "
+                f"({cpfta_meta['raw']}%), source: FBR SRO 1640(I)/2019"
+            )
+        elif cpfta_meta is not None:
+            special_rates["pak_china_fta_cd"] = None
+            special_details["pak_china_fta_cd"] = "CPFTA schedule lists no preferential rate for the current year."
+    except Exception as cpfta_error:
+        # Keep the TIPP result as a fallback only when the official schedule
+        # cannot be fetched; expose the limitation to the UI.
+        special_details["pak_china_fta_cd"] = (special_details.get("pak_china_fta_cd") or "") + f" | CPFTA schedule lookup warning: {cpfta_error}"
     # TIPP often does not expose the import-stage minimum value-addition tax
     # (shown by WeBOC as Additional Sales Tax / AST). The Twelfth Schedule to
     # the Sales Tax Act, 1990 provides a 3% ad-valorem rate, subject to its
@@ -356,6 +516,9 @@ def lookup(hs, facts=None):
     ast_rule = twelfth_schedule_ast_rule(hs8, facts=facts)
     ast_rate = ast_rule["rate"]
     rates["ast"] = ast_rate
+    it_rule = apply_atl_adjustment(income_tax_rule(hs8, importer_type=importer_type, schedule_part=schedule_part, atl=atl, facts=facts), atl=atl)
+    if it_rule.get("rate") is not None:
+        rates["it"] = it_rule["rate"]
     description = extract_commodity_info(soup, tipp_code)
 
     return {
@@ -372,6 +535,7 @@ def lookup(hs, facts=None):
         },
         "non_core": non_core,
         "special_rates": special_rates,
+        "income_tax_rule": it_rule,
         "special_details": special_details,
         "validity": "; ".join(validity),
         "source_url": commodity_url,
@@ -406,6 +570,18 @@ def ast_only():
     except Exception as error:
         return jsonify({"error": str(error)}), 400
 
+
+@app.route("/api/income-tax")
+def income_tax_only():
+    hs=request.args.get("hs","")
+    try:
+        hs8,_=normalize_hs(hs)
+        rule=income_tax_rule(hs8, importer_type=request.args.get("importer_type","auto"), schedule_part=request.args.get("schedule_part","auto"), atl=request.args.get("atl","1").lower() in {"1","true","yes","on"})
+        rule=apply_atl_adjustment(rule, atl=request.args.get("atl","1").lower() in {"1","true","yes","on"})
+        return jsonify({"income_tax_rule":rule})
+    except Exception as error:
+        return jsonify({"error":str(error)}),400
+
 @app.route("/health")
 def health():
     return jsonify({"ok": True})
@@ -414,6 +590,9 @@ def health():
 @app.route("/api/tariff")
 def tariff():
     hs = request.args.get("hs", "")
+    importer_type = request.args.get("importer_type", "auto")
+    schedule_part = request.args.get("schedule_part", "auto")
+    atl = request.args.get("atl", "1").lower() in truthy
     truthy = {"1", "true", "yes", "on"}
     facts = {
         "manufacturer_inhouse_raw_material": request.args.get("manufacturer_inhouse_raw_material", "").lower() in truthy,
@@ -427,7 +606,7 @@ def tariff():
         "coal_direct_to_ipp": request.args.get("coal_direct_to_ipp", "").lower() in truthy,
     }
     try:
-        return jsonify(lookup(hs, facts=facts))
+        return jsonify(lookup(hs, facts=facts, importer_type=importer_type, schedule_part=schedule_part, atl=atl))
     except Exception as error:
         return jsonify({"error": str(error)}), 400
 
