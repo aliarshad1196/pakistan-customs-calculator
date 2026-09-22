@@ -7,7 +7,7 @@ from pathlib import Path
 import requests
 import urllib3
 from bs4 import BeautifulSoup
-from pypdf import PdfReader
+import fitz  # PyMuPDF
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -222,25 +222,35 @@ def table_headers(table):
 
 
 def _download_cpfta_text(session):
-    """Download/cache the official CPFTA tariff schedule and return normalized text."""
+    """Download/cache the official CPFTA tariff schedule using PyMuPDF.
+
+    PyMuPDF is used instead of pypdf because the FBR CPFTA PDF contains a
+    content stream that can make pypdf extraction take longer than Render's
+    default Gunicorn timeout.
+    """
     if os.path.exists(CPFTA_TEXT_CACHE):
         try:
             return Path(CPFTA_TEXT_CACHE).read_text(encoding="utf-8")
         except Exception:
             pass
+
     if not os.path.exists(CPFTA_CACHE):
-        r = session.get(CPFTA_SRO_URL, timeout=60, verify=False)
+        r = session.get(CPFTA_SRO_URL, timeout=(15, 75), verify=False)
         r.raise_for_status()
         with open(CPFTA_CACHE, "wb") as f:
             f.write(r.content)
-    reader = PdfReader(CPFTA_CACHE)
+
     parts = []
-    for page in reader.pages:
-        try:
-            parts.append(page.extract_text() or "")
-        except Exception:
-            continue
+    with fitz.open(CPFTA_CACHE) as doc:
+        for page in doc:
+            try:
+                parts.append(page.get_text("text") or "")
+            except Exception:
+                continue
+
     text = re.sub(r"\s+", " ", " ".join(parts)).strip()
+    if not text:
+        raise RuntimeError("FBR CPFTA PDF was downloaded but no text could be extracted.")
     try:
         Path(CPFTA_TEXT_CACHE).write_text(text, encoding="utf-8")
     except Exception:
