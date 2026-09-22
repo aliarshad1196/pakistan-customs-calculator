@@ -16,7 +16,7 @@ button{width:100%;border:0;border-radius:11px;padding:14px;font-size:16px;font-w
 button.secondary{background:#eef4ff;color:#175cd3}
 .status{font-size:13px;margin-top:10px;color:#667085}
 .rates{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:12px}
-.rate{background:#f8fafc;padding:11px;border-radius:10px}.rate b{display:block;font-size:12px;color:#667085}.rate span{font-size:18px;font-weight:700}
+.rate{background:#f8fafc;padding:11px;border-radius:10px}.rate b{display:block;font-size:12px;color:#667085;margin-bottom:6px}.rate input{padding:9px;font-size:16px;font-weight:700}.rate small{display:block;margin-top:4px;font-size:11px}
 .result{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #eee}.total{font-size:19px;font-weight:800}
 small{color:#667085}
 @media(max-width:430px){.grid{grid-template-columns:1fr}}
@@ -32,6 +32,7 @@ small{color:#667085}
 <button onclick="fetchTariff()">Fetch TIPP Rates</button>
 <div id="status" class="status"></div>
 <div id="commodity"></div>
+<div class="status" style="margin-top:12px">TIPP rates are loaded automatically, but you can edit any rate manually.</div>
 <div id="rates" class="rates"></div>
 <div id="options" style="margin-top:14px;display:none">
 <label style="display:flex;align-items:center;gap:9px;font-weight:700;cursor:pointer"><input id="fta" type="checkbox" style="width:auto" onchange="applyOptions()"> Apply Pak-China FTA (CD) rate</label>
@@ -59,6 +60,7 @@ small{color:#667085}
 
 <script>
 const rates={cd:0,acd:0,rd:0,st:0,ast:0,it:0};
+const tippRates={cd:0,acd:0,rd:0,st:0,ast:0,it:0};
 let specialRates={pak_china_fta_cd:null,income_tax_exemption_first_schedule_ii:null};
 const money=n=>Number(n||0).toLocaleString('en-PK',{maximumFractionDigits:2});
 function pct(x){return (Number(x||0)*100).toFixed(2)+'%'}
@@ -75,12 +77,13 @@ async function fetchTariff(){
    rates.cd=Number(d.rates.cd||0); rates.acd=Number(d.rates.acd||0);
    rates.rd=Number(d.rates.rd||0); rates.st=Number(d.rates.st||0);
    rates.ast=Number(d.rates.ast||0); rates.it=Number(d.rates.it||0);
+   Object.assign(tippRates,rates);
    specialRates.pak_china_fta_cd=d.special_rates?.pak_china_fta_cd ?? null;
    specialRates.income_tax_exemption_first_schedule_ii=d.special_rates?.income_tax_exemption_first_schedule_ii ?? null;
    document.getElementById('commodity').innerHTML='<p><b>'+ (d.code||hs) +'</b> — '+(d.description||'')+'</p>';
    document.getElementById('rates').innerHTML=
-    [['CD (TIPP)',rates.cd],['ACD',rates.acd],['RD',rates.rd],['ST',rates.st],['AST',rates.ast],['IT (TIPP)',rates.it]]
-    .map(x=>'<div class="rate"><b>'+x[0]+'</b><span>'+pct(x[1])+'</span></div>').join('');
+    [['CD','cd'],['ACD','acd'],['RD','rd'],['ST','st'],['AST','ast'],['IT','it']]
+    .map(x=>'<div class="rate"><b>'+x[0]+' Rate (%)</b><input id="rate_'+x[1]+'" type="number" min="0" step="0.01" value="'+(Number(rates[x[1]])*100)+'" oninput="syncManualRate(\''+x[1]+'\')"><small>Editable • TIPP: '+pct(rates[x[1]])+'</small></div>').join('');
    document.getElementById('options').style.display='block';
    const ftaBox=document.getElementById('fta');
    const itBox=document.getElementById('itExemption');
@@ -100,17 +103,31 @@ async function fetchTariff(){
    calc();
  }catch(e){status.textContent='Error: '+e.message}
 }
+function syncManualRate(key){
+ const el=document.getElementById('rate_'+key);
+ if(el) rates[key]=Math.max(0,Number(el.value||0))/100;
+ calc();
+}
+function setRateInput(key,value){
+ const el=document.getElementById('rate_'+key);
+ if(el) el.value=(Number(value||0)*100).toString();
+ rates[key]=Number(value||0);
+}
 function applyOptions(){
  const fta=document.getElementById('fta');
  const itBox=document.getElementById('itExemption');
  if(fta && fta.checked && specialRates.pak_china_fta_cd!==null){
+   setRateInput('cd',specialRates.pak_china_fta_cd);
    document.getElementById('ftaInfo').textContent='Applied Pak-China FTA (CD): '+pct(specialRates.pak_china_fta_cd);
  } else if(fta && !fta.disabled){
+   setRateInput('cd',tippRates.cd);
    document.getElementById('ftaInfo').textContent='TIPP Pak-China FTA (CD): '+pct(specialRates.pak_china_fta_cd);
  }
  if(itBox && itBox.checked && specialRates.income_tax_exemption_first_schedule_ii!==null){
+   setRateInput('it',specialRates.income_tax_exemption_first_schedule_ii);
    document.getElementById('itInfo').textContent='Applied Income Tax Exemption: '+pct(specialRates.income_tax_exemption_first_schedule_ii);
  } else if(itBox && !itBox.disabled){
+   setRateInput('it',tippRates.it);
    document.getElementById('itInfo').textContent='TIPP Income Tax Exemption: '+pct(specialRates.income_tax_exemption_first_schedule_ii);
  }
  calc();
@@ -120,11 +137,10 @@ function calc(){
  const p=Number(document.getElementById('price').value||0);
  const fx=Number(document.getElementById('fx').value||0);
  const cv=q*p*fx;
- const effectiveCd=(document.getElementById('fta')?.checked && specialRates.pak_china_fta_cd!==null) ? specialRates.pak_china_fta_cd : rates.cd;
- const effectiveIt=(document.getElementById('itExemption')?.checked && specialRates.income_tax_exemption_first_schedule_ii!==null) ? specialRates.income_tax_exemption_first_schedule_ii : rates.it;
- const cd=cv*effectiveCd, acd=cv*rates.acd, rd=cv*rates.rd;
- const st=(cv+cd+rd)*rates.st;
- const ast=(cv+cd+rd)*rates.ast;
+ const cd=cv*rates.cd, acd=cv*rates.acd, rd=cv*rates.rd;
+ const effectiveIt=rates.it;
+ const st=(cv+cd+acd+rd)*rates.st;
+ const ast=(cv+cd+acd+rd)*rates.ast;
  const it=(cv+cd+rd+acd+ast+st)*effectiveIt;
  const total=cd+acd+rd+st+ast+it;
  const landed=cv+total;
