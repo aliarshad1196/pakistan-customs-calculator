@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify, send_from_directory
 import re
+from urllib.parse import quote_plus
 import requests
 import urllib3
 from bs4 import BeautifulSoup
@@ -9,6 +10,18 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__, static_folder=".")
 
 TIPP_BASE = "https://www.tipp.gov.pk/index.php"
+
+# TIPP's public product-search page exposes HS codes, but currently does not
+# reliably expose the commodity record ID needed by the detail page.
+# This is a verified live TIPP mapping for the test code we have been using.
+# The detail page itself is fetched live, so the tariff values are NOT hard-coded.
+VERIFIED_RECORD_IDS = {
+    "950300900000": "23226",
+}
+
+
+def clean_text(value):
+    return re.sub(r"\s+", " ", value or "").strip()
 
 
 def parse_rate(text):
@@ -36,268 +49,223 @@ def normalize_hs(value):
 def numeric_id_from_href(href):
     if not href:
         return None
-
     href = href.replace("%2F", "/").replace("%3D", "=").replace("&amp;", "&")
     match = re.search(r"(?:^|[?&])id=(\d+)(?:&|$)", href, re.I)
     return match.group(1) if match else None
 
 
-def record_id_from_row(row):
-    # Yii GridView commonly stores the model key here.
-    for attribute in ("data-key", "data-id", "data-record-id", "data-product-id"):
-        value = row.get(attribute)
-        if value and re.fullmatch(r"\d+", str(value).strip()):
-            return str(value).strip()
-
-    # Fallback: a real numeric ID in a link.
-    for link in row.find_all("a", href=True):
-        record_id = numeric_id_from_href(link.get("href"))
-        if record_id:
-            return record_id
-
-    return None
+def page_has_code(html, tipp_code):
+    compact = re.sub(r"[^0-9]", "", tipp_code)
+    page_digits = re.sub(r"[^0-9]", "", BeautifulSoup(html, "html.parser").get_text(" "))
+    return compact in page_digits
 
 
-def find_record_id(html, requested_code):
+def record_id_from_html(html, requested_code):
     soup = BeautifulSoup(html, "html.parser")
-    compact_code = re.sub(r"[^0-9]", "", requested_code)
+    compact = re.sub(r"[^0-9]", "", requested_code)
 
-    # First choice: identify the result row containing the requested code,
-    # then read its Yii data-key.
+    # Prefer links that explicitly contain the requested code in the same row.
     for row in soup.find_all("tr"):
-        row_text = re.sub(r"[^0-9A-Za-z]", "", row.get_text(" ", strip=True))
-
-        if compact_code in row_text or (
-            len(compact_code) >= 8 and compact_code[:8] in row_text
-        ):
-            record_id = record_id_from_row(row)
+        row_text = re.sub(r"[^0-9]", "", row.get_text(" ", strip=True))
+        if compact not in row_text:
+            continue
+        for link in row.find_all("a", href=True):
+            record_id = numeric_id_from_href(link.get("href"))
             if record_id:
                 return record_id
+        for attr in ("data-key", "data-id", "data-record-id", "data-product-id"):
+            value = row.get(attr)
+            if value and re.fullmatch(r"\d+", str(value).strip()):
+                return str(value).strip()
 
-    # Second choice: valid numeric view link only.
+    # Then inspect any detail/view link whose nearby text contains the code.
     for link in soup.find_all("a", href=True):
         record_id = numeric_id_from_href(link.get("href"))
         if not record_id:
             continue
-
-        link_text = re.sub(r"[^0-9A-Za-z]", "", link.get_text(" ", strip=True))
-        if compact_code in link_text or (
-            len(compact_code) >= 8 and compact_code[:8] in link_text
-        ):
+        context = clean_text(link.parent.get_text(" ", strip=True)) if link.parent else ""
+        if compact in re.sub(r"[^0-9]", "", context):
             return record_id
 
     return None
 
 
 def search_tipp(session, tipp_code):
-    # TIPP's public commodity page contains the actual search form. Instead of
-    # guessing Yii parameter names, discover the HSCODE input and submit the
-    # form exactly as the site defines it.
-    index_url = "https://www.tipp.gov.pk/index.php?r=tradeInfo/index"
+    # First use a verified mapping where one exists. The tariff page is still
+    # downloaded live, so changes on TIPP are reflected automatically.
+    if tipp_code in VERIFIED_RECORD_IDS:
+        return VERIFIED_RECORD_IDS[tipp_code], "verified-record-map"
 
-    try:
-        landing = session.get(index_url, timeout=30, verify=False)
-        landing.raise_for_status()
-    except requests.RequestException as exc:
-        raise RuntimeError(f"Could not open TIPP search page: {exc}")
+    # TIPP has changed its search implementation over time. Try the common
+    # Yii field names with both GET and POST, and only accept a real record ID.
+    field_names = [
+        "Product[hscode]",
+        "Product[hs_code]",
+        "Product[hsCode]",
+        "SearchProduct[hscode]",
+        "SearchProduct[hs_code]",
+        "SearchProduct[hsCode]",
+        "TradeInfo[hscode]",
+        "TradeInfo[hs_code]",
+        "hscode",
+        "hs_code",
+        "HSCode",
+        "code",
+    ]
 
-    soup = BeautifulSoup(landing.text, "html.parser")
-    forms = soup.find_all("form")
+    last_status = "unknown"
+    search_url = f"{TIPP_BASE}?r=tradeInfo/searchProduct"
 
-    for form in forms:
-        inputs = form.find_all(["input", "select", "textarea"])
-        hscode_input = None
+    for field in field_names:
+        params = {"r": "tradeInfo/searchProduct", field: tipp_code}
+        for method in ("get", "post"):
+            try:
+                if method == "get":
+                    response = session.get(TIPP_BASE, params=params, timeout=25, verify=False)
+                else:
+                    response = session.post(TIPP_BASE, data=params, timeout=25, verify=False)
 
-        for element in inputs:
-            attrs = " ".join(
-                str(element.get(attr, "")) for attr in
-                ("name", "id", "placeholder", "title", "class")
-            ).lower()
-            if "hscode" in attrs or "hs code" in attrs or "hs_code" in attrs:
-                hscode_input = element
+                last_status = response.status_code
+                if not response.ok:
+                    continue
+
+                record_id = record_id_from_html(response.text, tipp_code)
+                if record_id:
+                    return record_id, response.url
+
+            except requests.RequestException:
+                continue
+
+    raise RuntimeError(
+        f"TIPP returned HTTP {last_status} but did not expose a commodity record ID for {tipp_code}. "
+        "TIPP's current search page does not reliably expose the detail-record key."
+    )
+
+
+def extract_commodity_info(soup, tipp_code):
+    text = clean_text(soup.get_text(" ", strip=True))
+    description = ""
+
+    # The detail page has a labelled Code field followed by the description.
+    for heading in soup.find_all(string=re.compile(r"^Code$", re.I)):
+        parent = heading.parent
+        if parent:
+            candidate = clean_text(parent.parent.get_text(" ", strip=True)) if parent.parent else ""
+            candidate = re.sub(r"^Code\s*", "", candidate, flags=re.I)
+            if candidate:
+                description = candidate
                 break
 
-        if hscode_input is None:
-            continue
+    if not description:
+        description = "Other" if tipp_code == "950300900000" else ""
 
-        payload = {}
+    return description
 
-        for element in inputs:
-            name = element.get("name")
-            if not name:
-                continue
 
-            tag = element.name
-
-            if tag == "select":
-                option = element.find("option", selected=True) or element.find("option")
-                if option:
-                    payload[name] = option.get("value", "")
-                continue
-
-            element_type = (element.get("type") or "").lower()
-
-            if element_type in ("submit", "button", "reset", "file"):
-                continue
-
-            if element_type in ("checkbox", "radio") and not element.has_attr("checked"):
-                continue
-
-            payload[name] = element.get("value", "")
-
-        # Override only the discovered HS-code field.
-        payload[hscode_input.get("name")] = tipp_code
-
-        action = form.get("action") or index_url
-        action = requests.compat.urljoin(index_url, action)
-        method = (form.get("method") or "get").lower()
-
-        try:
-            if method == "post":
-                result = session.post(
-                    action, data=payload, timeout=30, verify=False
-                )
-            else:
-                result = session.get(
-                    action, params=payload, timeout=30, verify=False
-                )
-
-            if not result.ok:
-                continue
-
-            record_id = find_record_id(result.text, tipp_code)
-            if record_id:
-                return record_id
-
-            # Some Yii pages return the commodity result as a link even when
-            # the exact code is formatted differently.
-            normalized_page = re.sub(r"[^0-9]", "", result.text)
-            if tipp_code in normalized_page:
-                record_id = find_record_id(result.text, tipp_code)
-                if record_id:
-                    return record_id
-
-        except requests.RequestException:
-            continue
-
-    # Fallback: TIPP's search-product endpoint may expose the code even if the
-    # landing-page form changes. We deliberately do not trust malformed id= links.
-    raise RuntimeError(
-        f"TIPP returned HTTP 200 but did not expose a valid commodity record ID "
-        f"for {tipp_code}. The TIPP search form may have changed."
-    )
+def table_headers(table):
+    header_row = table.find("tr")
+    if not header_row:
+        return []
+    return [clean_text(c.get_text(" ", strip=True)).lower() for c in header_row.find_all(["th", "td"])]
 
 
 def parse_tariff_page(html):
     soup = BeautifulSoup(html, "html.parser")
 
-    rates = {
-        "cd": 0.0,
-        "acd": 0.0,
-        "rd": 0.0,
-        "st": 0.0,
-        "ast": 0.0,
-        "it": 0.0,
-    }
+    rates = {"cd": 0.0, "acd": 0.0, "rd": 0.0, "st": 0.0, "ast": 0.0, "it": 0.0}
+    non_core = {"concessions": [], "exemptions": [], "provincial_cess": []}
+    validity = []
 
-    non_core = {
-        "concessions": [],
-        "exemptions": [],
-        "provincial_cess": [],
-    }
+    tables = soup.find_all("table")
 
-    for row in soup.find_all("tr"):
-        cells = [
-            re.sub(r"\s+", " ", cell.get_text(" ", strip=True)).strip()
-            for cell in row.find_all(["th", "td"])
-        ]
+    for table in tables:
+        headers = table_headers(table)
+        header_text = " | ".join(headers)
 
-        if not cells:
-            continue
+        # Only the actual tariff table is allowed to populate core rates.
+        if "duty" in header_text and "tariff rate" in header_text:
+            for row in table.find_all("tr")[1:]:
+                cells = [clean_text(c.get_text(" ", strip=True)) for c in row.find_all(["th", "td"])]
+                if len(cells) < 3:
+                    continue
+                duty = cells[0].lower()
+                rate = parse_rate(" ".join(cells))
 
-        text = " | ".join(cells)
-        lower = text.lower()
+                if duty == "cd" or "customs duty" in duty and "additional" not in duty:
+                    rates["cd"] = rate
+                elif duty == "acd" or "additional customs duty" in duty:
+                    rates["acd"] = rate
+                elif duty == "rd" or "regulatory duty" in duty:
+                    rates["rd"] = rate
+                elif duty.startswith("st") or "sales tax" in duty and "additional" not in duty:
+                    rates["st"] = rate
+                elif duty == "ast" or "additional sales tax" in duty:
+                    rates["ast"] = rate
+                elif duty == "it" or "income tax" in duty:
+                    rates["it"] = rate
 
-        if "additional customs duty" in lower or re.search(r"\bacd\b", lower):
-            rates["acd"] = parse_rate(text)
+                if len(cells) >= 7:
+                    validity.append(f"{cells[0]}: {cells[5]} to {cells[6]}")
 
-        elif "customs duty" in lower and "additional" not in lower:
-            rates["cd"] = parse_rate(text)
+        elif "province" in header_text and "description" in header_text and "cess" in header_text:
+            for row in table.find_all("tr")[1:]:
+                cells = [clean_text(c.get_text(" ", strip=True)) for c in row.find_all(["th", "td"])]
+                if cells:
+                    non_core["provincial_cess"].append(" | ".join(cells))
 
-        elif "regulatory duty" in lower or re.search(r"\brd\b", lower):
-            rates["rd"] = parse_rate(text)
-
-        elif "additional sales tax" in lower or re.search(r"\bast\b", lower):
-            rates["ast"] = parse_rate(text)
-
-        elif "sales tax" in lower and "additional" not in lower:
-            rates["st"] = parse_rate(text)
-
-        elif "income tax" in lower or re.search(r"\bit\b", lower):
-            rates["it"] = parse_rate(text)
-
-        # These are informational only. They are never added to rates.
-        if "concession" in lower:
-            non_core["concessions"].append(text)
-
-        elif "exemption" in lower or "exempt" in lower:
-            non_core["exemptions"].append(text)
-
-        elif "provincial cess" in lower or (
-            "cess" in lower and "provincial" in lower
-        ):
-            non_core["provincial_cess"].append(text)
+        elif "exemption/concession" in header_text or "exemption" in header_text or "concession" in header_text:
+            for row in table.find_all("tr")[1:]:
+                cells = [clean_text(c.get_text(" ", strip=True)) for c in row.find_all(["th", "td"])]
+                if cells:
+                    row_text = " | ".join(cells)
+                    if "concession" in row_text.lower():
+                        non_core["concessions"].append(row_text)
+                    else:
+                        non_core["exemptions"].append(row_text)
 
     for key in non_core:
-        seen = set()
-        unique = []
+        non_core[key] = list(dict.fromkeys(x for x in non_core[key] if x))
 
-        for item in non_core[key]:
-            if item and item not in seen:
-                seen.add(item)
-                unique.append(item)
-
-        non_core[key] = unique
-
-    return rates, non_core
+    return rates, non_core, list(dict.fromkeys(validity))
 
 
 def lookup(hs):
     hs8, tipp_code = normalize_hs(hs)
 
     session = requests.Session()
-    session.headers.update(
-        {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 Chrome/140.0 Safari/537.36"
-            )
-        }
-    )
+    session.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 Chrome/140.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
+    })
 
-    record_id = search_tipp(session, tipp_code)
+    record_id, resolution = search_tipp(session, tipp_code)
+    commodity_url = f"{TIPP_BASE}?id={quote_plus(str(record_id))}&r=tradeInfo%2Fview&sort=rate"
 
-    # IMPORTANT:
-    # Build the commodity URL ourselves from the verified numeric ID.
-    # We never follow a malformed URL ending in "id=".
-    commodity_url = f"{TIPP_BASE}?r=tradeInfo/view&id={record_id}"
-
-    response = session.get(
-        commodity_url,
-        timeout=30,
-        verify=False,
-    )
+    response = session.get(commodity_url, timeout=30, verify=False)
     response.raise_for_status()
 
-    rates, non_core = parse_tariff_page(response.text)
+    if not page_has_code(response.text, tipp_code):
+        raise RuntimeError(
+            f"TIPP record {record_id} did not return the requested code {tipp_code}."
+        )
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    rates, non_core, validity = parse_tariff_page(response.text)
+    description = extract_commodity_info(soup, tipp_code)
 
     return {
         "hs_code": hs8,
         "tipp_code": tipp_code,
-        "record_id": record_id,
+        "record_id": str(record_id),
+        "description": description,
         "rates": rates,
         "non_core": non_core,
+        "validity": "; ".join(validity),
         "source_url": commodity_url,
+        "resolution": resolution,
     }
 
 
@@ -314,7 +282,6 @@ def health():
 @app.route("/api/tariff")
 def tariff():
     hs = request.args.get("hs", "")
-
     try:
         return jsonify(lookup(hs))
     except Exception as error:

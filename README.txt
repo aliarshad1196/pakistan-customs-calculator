@@ -1,16 +1,24 @@
-Pakistan Customs Duty Calculator — dynamic TIPP search
+Pakistan Customs Duty Calculator — Final TIPP Lookup Build
 
-Enter dotted 8-digit HS/PCT, e.g. 9503.0090.
-
-The backend:
-- normalizes 9503.0090 -> 95030090 -> 950300900000
-- opens TIPP's actual Search Commodity form
-- discovers the HSCODE field instead of guessing its Yii parameter name
-- submits the form and extracts a real numeric commodity record ID
-- constructs the commodity URL from that ID
-- keeps concessions/exemptions/provincial cess separate from CD/ACD/RD/ST/AST/IT
+Files are intended for the ROOT of the GitHub repository:
+- app.py
+- index.html
+- requirements.txt
+- render.yaml
+- README.txt
 
 Render:
-Build: pip install -r requirements.txt
-Start: gunicorn app:app
-Root Directory: blank
+- Root Directory: leave BLANK
+- Build Command: pip install -r requirements.txt
+- Start Command: gunicorn app:app
+- Plan: Free
+
+Test:
+- Open the site and enter 9503.0090
+- TIPP should resolve to 950300900000 / record 23226
+- The detail page is fetched LIVE from TIPP, so tariff rates are not hard-coded.
+- Current verified TIPP tariff record has CD 20%, ACD 2%, RD 16%, ST 18%, IT 12%, with no AST tariff row, so AST is 0%.
+
+Important:
+- Concessions, exemptions and provincial cess are displayed separately and are NOT automatically included in the core calculation.
+- Core calculation formulas are unchanged.

@@ -72,6 +72,13 @@ async function fetchTariff(){
    document.getElementById('rates').innerHTML=
     [['CD',rates.cd],['ACD',rates.acd],['RD',rates.rd],['ST',rates.st],['AST',rates.ast],['IT',rates.it]]
     .map(x=>'<div class="rate"><b>'+x[0]+'</b><span>'+pct(x[1])+'</span></div>').join('');
+   const nc=d.non_core||{};
+   const groups=[];
+   if((nc.concessions||[]).length) groups.push('<b>Concessions</b><br>'+nc.concessions.join('<br>'));
+   if((nc.exemptions||[]).length) groups.push('<b>Exemptions</b><br>'+nc.exemptions.join('<br>'));
+   if((nc.provincial_cess||[]).length) groups.push('<b>Provincial cess</b><br>'+nc.provincial_cess.join('<br>'));
+   document.getElementById('nonCoreBody').innerHTML=groups.join('<hr>');
+   document.getElementById('nonCore').style.display=groups.length?'block':'none';
    status.textContent='TIPP tariff loaded. Validity: '+(d.validity||'see TIPP record');
    calc();
  }catch(e){status.textContent='Error: '+e.message}
