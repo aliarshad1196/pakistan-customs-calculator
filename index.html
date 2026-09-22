@@ -36,6 +36,20 @@ small{color:#667085}
 <div id="rates" class="rates"></div>
 <div id="astInfo" class="status" style="margin-top:10px"></div>
 <div id="options" style="margin-top:14px;display:none">
+<details style="margin-bottom:12px;border:1px solid #e4e7ec;border-radius:12px;padding:10px;background:#fafafa" open>
+<summary style="font-weight:800;cursor:pointer">Twelfth Schedule / AST conditions</summary>
+<div class="status" style="margin:8px 0">Leave all unchecked for the normal commercial-importer case. Select a condition only when it genuinely applies to this import; the AST rule will update automatically.</div>
+<label style="display:flex;align-items:flex-start;gap:9px;font-weight:700;cursor:pointer"><input id="manufacturerRaw" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Manufacturer: raw materials/intermediary goods for in-house consumption (not supplied in the same state)</label>
+<label style="display:flex;align-items:flex-start;gap:9px;font-weight:700;cursor:pointer"><input id="serviceProvider" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Registered service provider: goods for in-house taxable business use, not for further supply</label>
+<label style="display:flex;align-items:flex-start;gap:9px;font-weight:700;cursor:pointer"><input id="licensedOMC" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Licensed Oil Marketing Company: qualifying Chapter 27 petroleum products for sale in Pakistan</label>
+<label style="display:flex;align-items:flex-start;gap:9px;font-weight:700;cursor:pointer"><input id="thirdSchedule" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Third Schedule goods on which sales tax is paid on retail-price basis</label>
+<label style="display:flex;align-items:flex-start;gap:9px;font-weight:700;cursor:pointer"><input id="manufacturerPlant" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Manufacturer: Chapter 84/85 plant, machinery or equipment for in-house installation/use</label>
+<label style="display:flex;align-items:flex-start;gap:9px;font-weight:700;cursor:pointer"><input id="motor850" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Motor car with cylinder capacity up to 850cc</label>
+<label style="display:flex;align-items:flex-start;gap:9px;font-weight:700;cursor:pointer"><input id="goldUnworked" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Gold in un-worked condition</label>
+<label style="display:flex;align-items:flex-start;gap:9px;font-weight:700;cursor:pointer"><input id="silverUnworked" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Silver in un-worked condition</label>
+<label style="display:flex;align-items:flex-start;gap:9px;font-weight:700;cursor:pointer"><input id="coalIPP" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Coal imported exclusively/directly for supply to Independent Power Producers (IPP)</label>
+<div id="astFactStatus" class="status"></div>
+</details>
 <label style="display:flex;align-items:center;gap:9px;font-weight:700;cursor:pointer"><input id="fta" type="checkbox" style="width:auto" onchange="applyOptions()"> Apply Pak-China FTA (CD) rate</label>
 <div id="ftaInfo" class="status"></div>
 <label style="display:flex;align-items:center;gap:9px;font-weight:700;cursor:pointer"><input id="itExemption" type="checkbox" style="width:auto" onchange="applyOptions()"> Use Income Tax Exemption under First Schedule II</label>
@@ -63,7 +77,7 @@ small{color:#667085}
 const rates={cd:0,acd:0,rd:0,st:0,ast:0,it:0};
 const tippRates={cd:0,acd:0,rd:0,st:0,ast:0,it:0};
 let specialRates={pak_china_fta_cd:null,income_tax_exemption_first_schedule_ii:null};
-let astSource={rate:0.03,name:'Twelfth Schedule — minimum value addition tax',note:'3% ad valorem on imported taxable goods, subject to statutory exclusions.'};
+let astSource={rate:0.03,name:'Twelfth Schedule — 3% value-addition tax',note:'3% applies by default to taxable imports; statutory exclusions may depend on importer/use facts.',status:'default'};
 const money=n=>Number(n||0).toLocaleString('en-PK',{maximumFractionDigits:2});
 function pct(x){return (Number(x||0)*100).toFixed(2)+'%'}
 function cleanHS(v){return String(v).replace(/[^0-9]/g,'')}
@@ -73,7 +87,7 @@ async function fetchTariff(){
  if(!hs){status.textContent='Enter an HS/PCT code.';return}
  status.textContent='Fetching current TIPP tariff…';
  try{
-   const r=await fetch('/api/tariff?hs='+encodeURIComponent(hs));
+   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}).toString());
    const d=await r.json();
    if(!r.ok) throw new Error(d.error||'Lookup failed');
    rates.cd=Number(d.rates.cd||0); rates.acd=Number(d.rates.acd||0);
@@ -86,10 +100,10 @@ async function fetchTariff(){
    document.getElementById('commodity').innerHTML='<p><b>'+ (d.code||hs) +'</b> — '+(d.description||'')+'</p>';
    document.getElementById('rates').innerHTML=
     [['CD','cd'],['ACD','acd'],['RD','rd'],['ST','st'],['AST','ast'],['IT','it']]
-    .map(x=>'<div class="rate"><b>'+x[0]+' Rate (%)</b><input id="rate_'+x[1]+'" type="number" min="0" step="0.01" value="'+(Number(rates[x[1]])*100)+'" oninput="syncManualRate(\''+x[1]+'\')"><small>'+ (x[1]==='ast' ? 'Editable • Twelfth Schedule: '+pct(rates[x[1]]) : 'Editable • TIPP: '+pct(rates[x[1]])) +'</small></div>').join('');
+    .map(x=>'<div class="rate"><b>'+x[0]+' Rate (%)</b><input id="rate_'+x[1]+'" type="number" min="0" step="0.01" value="'+(Number(rates[x[1]])*100)+'" oninput="syncManualRate(\''+x[1]+'\')"><small>'+ (x[1]==='ast' ? 'Editable • '+astSource.name+': '+pct(rates[x[1]]) : 'Editable • TIPP: '+pct(rates[x[1]])) +'</small></div>').join('');
    document.getElementById('options').style.display='block';
    const astNote=document.getElementById('astInfo');
-   if(astNote) astNote.textContent='Automatic AST source: '+astSource.name+' — '+astSource.note;
+   if(astNote) astNote.innerHTML='<b>AST rule:</b> '+astSource.name+' — '+astSource.note;
    const ftaBox=document.getElementById('fta');
    const itBox=document.getElementById('itExemption');
    ftaBox.disabled=specialRates.pak_china_fta_cd===null;
@@ -104,9 +118,42 @@ async function fetchTariff(){
    if((nc.provincial_cess||[]).length) groups.push('<b>Provincial cess</b><br>'+nc.provincial_cess.join('<br>'));
    document.getElementById('nonCoreBody').innerHTML=groups.join('<hr>');
    document.getElementById('nonCore').style.display=groups.length?'block':'none';
-   status.textContent='TIPP tariff loaded. Validity: '+(d.validity||'see TIPP record');
+   status.textContent='TIPP tariff loaded. AST rule applied: '+(astSource.status||'default')+'. Validity: '+(d.validity||'see TIPP record');
    calc();
  }catch(e){status.textContent='Error: '+e.message}
+}
+function astFacts(){
+ return {
+  manufacturer_inhouse_raw_material:document.getElementById('manufacturerRaw')?.checked?'1':'0',
+  registered_service_provider:document.getElementById('serviceProvider')?.checked?'1':'0',
+  licensed_omc:document.getElementById('licensedOMC')?.checked?'1':'0',
+  third_schedule:document.getElementById('thirdSchedule')?.checked?'1':'0',
+  manufacturer_plant_machinery:document.getElementById('manufacturerPlant')?.checked?'1':'0',
+  motor_car_850cc:document.getElementById('motor850')?.checked?'1':'0',
+  gold_unworked:document.getElementById('goldUnworked')?.checked?'1':'0',
+  silver_unworked:document.getElementById('silverUnworked')?.checked?'1':'0',
+  coal_direct_to_ipp:document.getElementById('coalIPP')?.checked?'1':'0'
+ };
+}
+async function refreshASTRule(){
+ const hs=cleanHS(document.getElementById('hs').value);
+ if(!hs) return;
+ const status=document.getElementById('astFactStatus');
+ if(status) status.textContent='Updating AST rule…';
+ try{
+  const params=new URLSearchParams({hs,...astFacts()});
+  const r=await fetch('/api/ast?'+params.toString());
+  const d=await r.json();
+  if(!r.ok) throw new Error(d.error||'AST rule lookup failed');
+  astSource=d.ast_source||astSource;
+  setRateInput('ast',astSource.rate);
+  const astInput=document.getElementById('rate_ast');
+  if(astInput) astInput.value=(Number(astSource.rate||0)*100).toString();
+  const astNote=document.getElementById('astInfo');
+  if(astNote) astNote.innerHTML='<b>AST rule:</b> '+astSource.name+' — '+astSource.note;
+  if(status) status.textContent='Applied: '+pct(astSource.rate)+' — '+astSource.name;
+  calc();
+ }catch(e){ if(status) status.textContent='AST rule error: '+e.message; }
 }
 function syncManualRate(key){
  const el=document.getElementById('rate_'+key);

@@ -17,6 +17,8 @@ TIPP_BASE = "https://www.tipp.gov.pk/index.php"
 # The detail page itself is fetched live, so the tariff values are NOT hard-coded.
 VERIFIED_RECORD_IDS = {
     "950300900000": "23226",
+    "961590900000": "23343",
+    "720449900000": "19547",
 }
 
 
@@ -136,9 +138,35 @@ def search_tipp(session, tipp_code):
             except requests.RequestException:
                 continue
 
+    # Last-resort fallback: TIPP's public search page can return HTTP 200 without
+    # exposing the internal commodity ID. Search engines often have the indexed
+    # TIPP detail URL, which contains the ID. This is only a discovery fallback;
+    # tariff data is still fetched directly from TIPP after the ID is found.
+    search_queries = [
+        f'site:tipp.gov.pk/index.php "{tipp_code}" "Code" "r=tradeInfo/view"',
+        f'site:tipp.gov.pk/index.php "{tipp_code}" "Commodity"',
+    ]
+    for q in search_queries:
+        try:
+            bing = session.get("https://www.google.com/search", params={"q": q}, timeout=15,
+                               headers={"User-Agent": "Mozilla/5.0"}, verify=False)
+            if bing.ok:
+                record_id = record_id_from_html(bing.text, tipp_code)
+                if record_id:
+                    return record_id, "search-engine-fallback"
+                # Google result links may be wrapped; extract any direct TIPP URL.
+                for match in re.finditer(r'https?://(?:www\.)?tipp\.gov\.pk/index\.php[^\"<> ]+', bing.text):
+                    url = match.group(0).replace('\\u003d', '=').replace('\\u0026', '&')
+                    record_id = numeric_id_from_href(url)
+                    if record_id:
+                        return record_id, "search-engine-fallback"
+        except requests.RequestException:
+            pass
+
     raise RuntimeError(
-        f"TIPP returned HTTP {last_status} but did not expose a commodity record ID for {tipp_code}. "
-        "TIPP's current search page does not reliably expose the detail-record key."
+        f"TIPP returned HTTP {last_status} but could not locate the commodity record for {tipp_code}. "
+        "TIPP's current public search page may return HTTP 200 without exposing the detail-record key. "
+        "Try the 8-digit PCT code again or use a current TIPP detail link."
     )
 
 
@@ -238,19 +266,65 @@ def parse_tariff_page(html):
     return rates, non_core, list(dict.fromkeys(validity)), special_rates, special_details
 
 
-def twelfth_schedule_ast_rate(hs8):
-    """Return the statutory minimum value-addition tax rate under the
-    Twelfth Schedule to the Sales Tax Act, 1990.
+def twelfth_schedule_ast_rule(hs8, facts=None):
+    """Determine import-stage minimum value-addition tax (AST/VAT) under the
+    Twelfth Schedule as amended through 30 June 2026.
 
-    The Schedule provides a 3% ad-valorem rate on imported taxable goods,
-    subject to its exclusions. Some exclusions depend on importer/use facts
-    that an HS code alone cannot establish, so the calculator applies the
-    statutory default and keeps AST editable for those cases.
+    The statutory default is 3%. Some exclusions depend on importer/use facts,
+    so the calculator exposes those facts instead of silently assuming them.
     """
-    return 0.03
+    facts = facts or {}
+    code = re.sub(r"[^0-9]", "", hs8)
 
+    # PCT-only exclusions.
+    if code in {"85171419", "85171430", "85171390"}:
+        return {"rate": 0.0, "status": "excluded", "rule": "Twelfth Schedule (2)(iv): specified cellular/satellite phones", "note": "AST is excluded for the specified PCT headings."}
+    if code.startswith("630900"):
+        return {"rate": 0.0, "status": "excluded", "rule": "Twelfth Schedule (2)(vi): second-hand/worn clothing or footwear", "note": "AST is excluded for PCT 6309.000."}
+    if code in {"27111100", "27112100"}:
+        return {"rate": 0.0, "status": "excluded", "rule": "Twelfth Schedule (2)(v): LNG / RLNG", "note": "AST is excluded for LNG/RLNG."}
 
-def lookup(hs):
+    # Third Schedule goods are excluded when sales tax is paid on retail-price basis.
+    if facts.get("third_schedule"):
+        return {"rate": 0.0, "status": "excluded", "rule": "Twelfth Schedule (2)(ix): Third Schedule goods", "note": "AST is excluded because the import is being treated under the Third Schedule retail-price regime."}
+
+    # Registered service provider, in-house taxable activity, no further supply.
+    if facts.get("registered_service_provider"):
+        return {"rate": 0.0, "status": "excluded", "rule": "Twelfth Schedule (2)(iii): registered service provider in-house use", "note": "AST is excluded for qualifying in-house business use not intended for further supply."}
+
+    # Petroleum products in Chapter 27: exclusion is conditional on licensed OMC.
+    if code.startswith("27") and facts.get("licensed_omc"):
+        return {"rate": 0.0, "status": "excluded", "rule": "Twelfth Schedule (2)(ii): Chapter 27 petroleum products imported by licensed OMC", "note": "AST is excluded for qualifying petroleum imports by a licensed Oil Marketing Company."}
+
+    # Manufacturer in-house plant/machinery in Chapters 84/85.
+    if facts.get("manufacturer_plant_machinery"):
+        if code.startswith("84") or code.startswith("85"):
+            return {"rate": 0.0, "status": "excluded", "rule": "Twelfth Schedule (2)(x): Chapters 84/85 plant, machinery and equipment", "note": "AST is excluded for qualifying manufacturer imports for in-house installation/use."}
+
+    # Manufacturer raw-material/intermediary-goods exclusion, with the statutory
+    # 2022 carve-outs for compressor scrap, motor scrap and copper cable scrap.
+    if facts.get("manufacturer_inhouse_raw_material"):
+        if code in {"72044940", "72044990", "74040090"}:
+            return {"rate": 0.03, "status": "applicable", "rule": "Twelfth Schedule (2)(i) carve-out", "note": "This scrap heading is expressly excluded from the manufacturer raw-material exemption; 3% AST remains applicable."}
+        return {"rate": 0.0, "status": "excluded", "rule": "Twelfth Schedule (2)(i): manufacturer in-house raw materials/intermediary goods", "note": "AST is excluded for qualifying raw materials/intermediary goods imported by a manufacturer for in-house consumption."}
+
+    # Motor cars up to 850cc.
+    if facts.get("motor_car_850cc") and code.startswith("8703"):
+        return {"rate": 0.0, "status": "excluded", "rule": "Twelfth Schedule (2)(xiv): motor cars up to 850cc", "note": "AST is excluded for motor cars with cylinder capacity up to 850cc."}
+
+    # Gold/silver exclusion requires the importer to confirm un-worked condition.
+    if facts.get("gold_unworked") and code.startswith("7108"):
+        return {"rate": 0.0, "status": "excluded", "rule": "Twelfth Schedule (2)(vii): gold in un-worked condition", "note": "AST is excluded for qualifying un-worked gold."}
+    if facts.get("silver_unworked") and code.startswith("7106"):
+        return {"rate": 0.0, "status": "excluded", "rule": "Twelfth Schedule (2)(viii): silver in un-worked condition", "note": "AST is excluded for qualifying un-worked silver."}
+
+    # Coal has a special 1% rate when imported coal is exclusively/directly supplied to IPPs.
+    if code.startswith("2701") and facts.get("coal_direct_to_ipp"):
+        return {"rate": 0.01, "status": "special_rate", "rule": "Twelfth Schedule (6): coal supplied directly to IPPs", "note": "Minimum value-addition tax is 1% for qualifying imported coal exclusively/directly supplied to Independent Power Producers."}
+
+    return {"rate": 0.03, "status": "default", "rule": "Twelfth Schedule — 3% value-addition tax", "note": "3% default applies because no statutory exclusion/special-rate condition was selected."}
+
+def lookup(hs, facts=None):
     hs8, tipp_code = normalize_hs(hs)
 
     session = requests.Session()
@@ -279,7 +353,8 @@ def lookup(hs):
     # (shown by WeBOC as Additional Sales Tax / AST). The Twelfth Schedule to
     # the Sales Tax Act, 1990 provides a 3% ad-valorem rate, subject to its
     # exclusions. Apply that statutory default here; the UI keeps it editable.
-    ast_rate = twelfth_schedule_ast_rate(hs8)
+    ast_rule = twelfth_schedule_ast_rule(hs8, facts=facts)
+    ast_rate = ast_rule["rate"]
     rates["ast"] = ast_rate
     description = extract_commodity_info(soup, tipp_code)
 
@@ -291,8 +366,9 @@ def lookup(hs):
         "rates": rates,
         "ast_source": {
             "rate": ast_rate,
-            "name": "Twelfth Schedule — minimum value addition tax",
-            "note": "3% ad valorem on imported taxable goods, subject to statutory exclusions."
+            "name": ast_rule["rule"],
+            "note": ast_rule["note"],
+            "status": ast_rule["status"],
         },
         "non_core": non_core,
         "special_rates": special_rates,
@@ -308,6 +384,28 @@ def home():
     return send_from_directory(".", "index.html")
 
 
+@app.route("/api/ast")
+def ast_only():
+    hs = request.args.get("hs", "")
+    truthy = {"1", "true", "yes", "on"}
+    facts = {
+        "manufacturer_inhouse_raw_material": request.args.get("manufacturer_inhouse_raw_material", "").lower() in truthy,
+        "registered_service_provider": request.args.get("registered_service_provider", "").lower() in truthy,
+        "licensed_omc": request.args.get("licensed_omc", "").lower() in truthy,
+        "third_schedule": request.args.get("third_schedule", "").lower() in truthy,
+        "manufacturer_plant_machinery": request.args.get("manufacturer_plant_machinery", "").lower() in truthy,
+        "motor_car_850cc": request.args.get("motor_car_850cc", "").lower() in truthy,
+        "gold_unworked": request.args.get("gold_unworked", "").lower() in truthy,
+        "silver_unworked": request.args.get("silver_unworked", "").lower() in truthy,
+        "coal_direct_to_ipp": request.args.get("coal_direct_to_ipp", "").lower() in truthy,
+    }
+    try:
+        hs8, _ = normalize_hs(hs)
+        rule = twelfth_schedule_ast_rule(hs8, facts=facts)
+        return jsonify({"ast_source": rule})
+    except Exception as error:
+        return jsonify({"error": str(error)}), 400
+
 @app.route("/health")
 def health():
     return jsonify({"ok": True})
@@ -316,8 +414,20 @@ def health():
 @app.route("/api/tariff")
 def tariff():
     hs = request.args.get("hs", "")
+    truthy = {"1", "true", "yes", "on"}
+    facts = {
+        "manufacturer_inhouse_raw_material": request.args.get("manufacturer_inhouse_raw_material", "").lower() in truthy,
+        "registered_service_provider": request.args.get("registered_service_provider", "").lower() in truthy,
+        "licensed_omc": request.args.get("licensed_omc", "").lower() in truthy,
+        "third_schedule": request.args.get("third_schedule", "").lower() in truthy,
+        "manufacturer_plant_machinery": request.args.get("manufacturer_plant_machinery", "").lower() in truthy,
+        "motor_car_850cc": request.args.get("motor_car_850cc", "").lower() in truthy,
+        "gold_unworked": request.args.get("gold_unworked", "").lower() in truthy,
+        "silver_unworked": request.args.get("silver_unworked", "").lower() in truthy,
+        "coal_direct_to_ipp": request.args.get("coal_direct_to_ipp", "").lower() in truthy,
+    }
     try:
-        return jsonify(lookup(hs))
+        return jsonify(lookup(hs, facts=facts))
     except Exception as error:
         return jsonify({"error": str(error)}), 400
 
