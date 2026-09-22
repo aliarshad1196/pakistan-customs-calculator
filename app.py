@@ -592,8 +592,8 @@ def tariff():
     hs = request.args.get("hs", "")
     importer_type = request.args.get("importer_type", "auto")
     schedule_part = request.args.get("schedule_part", "auto")
-    atl = request.args.get("atl", "1").lower() in truthy
     truthy = {"1", "true", "yes", "on"}
+    atl = request.args.get("atl", "1").lower() in truthy
     facts = {
         "manufacturer_inhouse_raw_material": request.args.get("manufacturer_inhouse_raw_material", "").lower() in truthy,
         "registered_service_provider": request.args.get("registered_service_provider", "").lower() in truthy,
