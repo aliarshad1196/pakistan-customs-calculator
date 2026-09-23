@@ -44,6 +44,11 @@ VERIFIED_RECORD_IDS = {
     "950300900000": "23226",
     "961590900000": "23343",
     "720449900000": "19547",
+    # TIPP search currently returns HTTP 200 for these codes but does not
+    # expose the internal commodity/detail ID. These IDs were verified from
+    # the corresponding current TIPP detail records.
+    "871140100000": "22712",
+    "721911000000": "19708",
 }
 
 
