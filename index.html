@@ -353,7 +353,7 @@ async function fetchDifferenceLeftHS(){
  const st=document.getElementById('diffLeftStatus'); if(!hs){st.textContent='Enter the left-side HS/PCT code.';return;}
  setFetchBusy('diffLeftFetch',true,'Fetch Left TIPP Rates'); st.textContent='Fetching current TIPP tariff…';
  try{
-   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts(),importer_type:document.getElementById('importerType').value,schedule_part:document.getElementById('schedulePart').value,atl:document.getElementById('atl').checked?'1':'0'}));
+   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}));
    const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
    diffLeftRates={cd:Number(d.rates.cd||0),acd:Number(d.rates.acd||0),rd:Number(d.rates.rd||0),st:Number(d.rates.st||0),ast:Number(d.rates.ast||0),it:Number(d.rates.it||0)}; diffLeftHsCode=hs;
    st.textContent='Loaded '+(d.code||hs)+' tariff rates for left side.'; calcDifference();
@@ -364,7 +364,7 @@ async function fetchDifferenceSameHS(){
  const st=document.getElementById('diffSameStatus'); if(!hs){st.textContent='Enter an HS/PCT code.';return;}
  setFetchBusy('diffSameFetch',true,'Fetch TIPP Rates'); st.textContent='Fetching current TIPP tariff…';
  try{
-   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts(),importer_type:document.getElementById('importerType').value,schedule_part:document.getElementById('schedulePart').value,atl:document.getElementById('atl').checked?'1':'0'}));
+   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}));
    const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
    rates.cd=Number(d.rates.cd||0); rates.acd=Number(d.rates.acd||0); rates.rd=Number(d.rates.rd||0); rates.st=Number(d.rates.st||0); rates.ast=Number(d.rates.ast||0); rates.it=Number(d.rates.it||0);
    Object.assign(tippRates,rates); diffRightRates={...rates}; diffSameHsCode=hs;
@@ -376,7 +376,7 @@ async function fetchDifferenceRightHS(){
  const st=document.getElementById('diffRightStatus'); if(!hs){st.textContent='Enter the right-side HS/PCT code.';return;}
  setFetchBusy('diffRightFetch',true,'Fetch Right TIPP Rates'); st.textContent='Fetching current TIPP tariff…';
  try{
-   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts(),importer_type:document.getElementById('importerType').value,schedule_part:document.getElementById('schedulePart').value,atl:document.getElementById('atl').checked?'1':'0'}));
+   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}));
    const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
    diffRightRates={cd:Number(d.rates.cd||0),acd:Number(d.rates.acd||0),rd:Number(d.rates.rd||0),st:Number(d.rates.st||0),ast:Number(d.rates.ast||0),it:Number(d.rates.it||0)}; diffRightHsCode=hs;
    st.textContent='Loaded '+(d.code||hs)+' tariff rates for right side.'; calcDifference();
