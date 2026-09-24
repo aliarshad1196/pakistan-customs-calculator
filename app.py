@@ -50,6 +50,7 @@ VERIFIED_RECORD_IDS = {
     # the corresponding current TIPP detail records.
     "871140100000": "22712",
     "721911000000": "19708",
+    "570339900000": "26954",
 }
 
 
@@ -185,23 +186,37 @@ def _extract_tipp_detail_ids_from_search_html(html, requested_code):
 
 
 def _tipp_search_one(session, field, tipp_code):
-    """Run one TIPP search request with a short timeout."""
+    """Search TIPP using one possible filter-field name.
+
+    TIPP is a Yii application and its public search form has changed field
+    naming over time. We therefore try several likely model/filter names and
+    only accept a response if the requested code is actually present.
+    """
     params = {"r": "tradeInfo/searchProduct", field: tipp_code, "Product_page": "1"}
     try:
-        response = session.get(TIPP_BASE, params=params, timeout=6, verify=False)
-        if response.ok:
-            return _extract_tipp_detail_ids_from_search_html(response.text, tipp_code) or [
-                record_id_from_html(response.text, tipp_code)
-            ] if record_id_from_html(response.text, tipp_code) else []
+        response = session.get(TIPP_BASE, params=params, timeout=5, verify=False)
+        if not response.ok:
+            return []
+        html = response.text
+        # Do not mistake the normal 47,406-row landing page for a successful
+        # filtered search. The exact code must occur in the returned table.
+        compact = re.sub(r"[^0-9]", "", tipp_code)
+        digits = re.sub(r"[^0-9]", "", BeautifulSoup(html, "html.parser").get_text(" "))
+        if compact not in digits:
+            return []
+        ids = _extract_tipp_detail_ids_from_search_html(html, tipp_code)
+        rid = record_id_from_html(html, tipp_code)
+        if rid and rid not in ids:
+            ids.insert(0, rid)
+        return ids
     except requests.RequestException:
-        pass
-    return []
+        return []
 
 
 def _validate_tipp_id(session, rid, tipp_code):
     try:
         detail_url = f"{TIPP_BASE}?id={quote_plus(str(rid))}&r=tradeInfo%2Fview&sort=rate"
-        detail = session.get(detail_url, timeout=8, verify=False)
+        detail = session.get(detail_url, timeout=6, verify=False)
         if detail.ok and page_has_code(detail.text, tipp_code):
             return str(rid)
     except requests.RequestException:
@@ -209,46 +224,84 @@ def _validate_tipp_id(session, rid, tipp_code):
     return None
 
 
-def search_tipp(session, tipp_code):
-    """Resolve a TIPP commodity record quickly and deterministically.
+def _search_tipp_external(session, tipp_code):
+    """Last-resort public-web discovery, kept to one short request.
 
-    The previous resolver could make many external search-engine requests and
-    then validate many candidates. On Render that could exceed the platform's
-    upstream timeout and surface as HTTP 502. This version keeps the lookup
-    entirely on TIPP, runs the small set of known search-field variants in
-    parallel, and validates only a small candidate set.
+    This is deliberately a fallback only. TIPP itself remains authoritative;
+    any discovered ID is validated against the live TIPP detail page.
+    """
+    import urllib.parse
+    q = urllib.parse.quote(f'site:tipp.gov.pk/index.php?id= "{tipp_code}" "tradeInfo"')
+    urls = [
+        f"https://www.google.com/search?q={q}",
+        f"https://www.bing.com/search?q={q}",
+    ]
+    def one(url):
+        try:
+            r = session.get(url, timeout=4, verify=False, headers={"User-Agent":"Mozilla/5.0"})
+            if r.ok:
+                return _extract_tipp_detail_ids_from_search_html(r.text, tipp_code)
+        except requests.RequestException:
+            return []
+        return []
+    # Do not wait on slow providers serially.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(one, u) for u in urls]
+        ids=[]
+        for f in as_completed(futures):
+            try:
+                for rid in f.result():
+                    if rid not in ids: ids.append(rid)
+            except Exception:
+                pass
+    return ids[:4]
+
+
+def search_tipp(session, tipp_code):
+    """Universal TIPP resolver.
+
+    1. Use the persistent seed map for already verified records.
+    2. Try TIPP's actual search filter using multiple possible field names.
+    3. Validate every candidate against the exact 12-digit code on its detail page.
+    4. Only then use a tiny external-web fallback.
+
+    This means a new PCT is not required to be hard-coded into the application.
     """
     if tipp_code in VERIFIED_RECORD_IDS:
         return VERIFIED_RECORD_IDS[tipp_code], "verified-record-map"
 
-    field_names = ["Product[hscode]", "Product[hs_code]", "hscode", "hs_code"]
-    candidate_ids = []
-
-    # All search variants run at once. Worst-case wait is approximately the
-    # single request timeout rather than four timeouts added together.
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [pool.submit(_tipp_search_one, session, field, tipp_code) for field in field_names]
-        for future in as_completed(futures):
+    fields = [
+        "Product[hscode]", "Product[hs_code]", "Product[hsCode]",
+        "Product[hs]", "Product[Hscode]", "ProductSearch[hscode]",
+        "ProductSearch[hs_code]", "hscode", "hs_code"
+    ]
+    candidate_ids=[]
+    with ThreadPoolExecutor(max_workers=len(fields)) as pool:
+        futures=[pool.submit(_tipp_search_one, session, f, tipp_code) for f in fields]
+        for f in as_completed(futures):
             try:
-                for rid in future.result():
+                for rid in f.result():
                     if rid and str(rid) not in candidate_ids:
                         candidate_ids.append(str(rid))
             except Exception:
-                continue
+                pass
 
-    # Validate at most six candidates concurrently. Exact HS-code validation
-    # remains mandatory before accepting a TIPP record.
-    candidate_ids = candidate_ids[:6]
     if candidate_ids:
-        with ThreadPoolExecutor(max_workers=6) as pool:
-            futures = [pool.submit(_validate_tipp_id, session, rid, tipp_code) for rid in candidate_ids]
-            for future in as_completed(futures):
+        with ThreadPoolExecutor(max_workers=min(6,len(candidate_ids))) as pool:
+            futures=[pool.submit(_validate_tipp_id, session,rid,tipp_code) for rid in candidate_ids[:6]]
+            for f in as_completed(futures):
                 try:
-                    validated = future.result()
-                    if validated:
-                        return validated, "tipp-search"
+                    rid=f.result()
+                    if rid:
+                        return rid,"tipp-search"
                 except Exception:
-                    continue
+                    pass
+
+    # Last resort: discover the detail URL from the public web, then validate.
+    for rid in _search_tipp_external(session,tipp_code):
+        valid=_validate_tipp_id(session,rid,tipp_code)
+        if valid:
+            return valid,"web-discovery"
 
     raise RuntimeError(
         f"TIPP could not resolve the exact commodity record for {tipp_code}. "
