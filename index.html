@@ -290,26 +290,29 @@ let manualCVActive=false;
 let manualCVValue=0;
 let manualCVText='';
 function setManualCV(value){
- const el=document.getElementById('breakdownCV');
- const start=el && typeof el.selectionStart==='number' ? el.selectionStart : null;
- const end=el && typeof el.selectionEnd==='number' ? el.selectionEnd : null;
+ // Do NOT rebuild the breakdown DOM while the user is typing. Rebuilding a
+ // number input on every keystroke moves the caret and makes digits appear
+ // reversed and Backspace unreliable (especially on iPhone).
  manualCVActive=true;
  manualCVText=String(value ?? '');
  manualCVValue=manualCVText.trim()==='' ? 0 : Number(manualCVText);
- calc();
- // calc() rebuilds the breakdown. Put focus back immediately so typing is seamless.
- requestAnimationFrame(()=>{
-   const next=document.getElementById('breakdownCV');
-   if(next){
-     next.focus();
-     if(start!==null){
-       const pos=Math.min(start,next.value.length);
-       const posEnd=Math.min(end===null?pos:end,next.value.length);
-       try{next.setSelectionRange(pos,posEnd);}catch(_){}
-     }
-   }
- });
+ updateBreakdownInPlace();
 }
+function updateBreakdownInPlace(){
+ const cv=manualCVActive ? manualCVValue : (Number(document.getElementById('qty')?.value||0)*Number(document.getElementById('price')?.value||0)*Number(document.getElementById('fx')?.value||0));
+ const cd=cv*rates.cd, acd=cv*rates.acd, rd=cv*rates.rd;
+ const st=(cv+cd+acd+rd)*rates.st;
+ const ast=gstMode?0:(cv+cd+acd+rd)*rates.ast;
+ const gst=gstMode?st*0.39:0;
+ const itBase=cv+cd+acd+rd+st+(gstMode?gst:ast);
+ const it=itBase*rates.it;
+ const total=cd+acd+rd+st+ast+gst+it;
+ const incidence=cv>0 ? (total/cv)*100 : 0;
+ const vals={cd,acd,rd,st,ast,gst,it,total};
+ Object.keys(vals).forEach(k=>{ const el=document.getElementById('cvv_'+k); if(el) el.textContent=money(vals[k]); });
+ const inc=document.getElementById('cvv_incidence'); if(inc) inc.textContent=incidence.toFixed(4)+'%';
+}
+
 function resetManualCV(){
  manualCVActive=false;
  manualCVValue=0;
@@ -481,9 +484,16 @@ function calc(){
  const total=cd+acd+rd+st+ast+gst+it;
  const incidence=cv>0 ? (total/cv)*100 : 0;
  const rows=[['Customs Value (CV)',cv],['CD',cd],['ACD',acd],['RD',rd],['ST',st],['AST',ast],...(gstMode?[['GST',gst]]:[]),['IT',it],['Total Duties & Taxes',total]];
- let html='<div class="result"><span>Customs Value (CV)</span><div style="display:flex;align-items:center;gap:8px;justify-content:flex-end"><input id="breakdownCV" type="number" inputmode="decimal" step="any" value="'+(manualCVActive?manualCVText:cv)+'" oninput="setManualCV(this.value)" style="width:180px;margin:0;text-align:right" title="Edit CV manually"><button type="button" class="secondary" onclick="resetManualCV()" style="padding:6px 10px;margin:0" title="Use calculated CV">Auto</button></div></div>';
- html+='<div class="result"><span>Total Incidence</span><b>'+incidence.toFixed(4)+'%</b></div>';
- html+=rows.slice(1).map((r,i)=>'<div class="result '+((i+1)>=7?'total':'')+'"><span>'+r[0]+'</span><b>'+money(r[1])+'</b></div>').join('');
+ let html='<div class="result"><span>Customs Value (CV)</span><div style="display:flex;align-items:center;gap:8px;justify-content:flex-end"><input id="breakdownCV" type="text" inputmode="decimal" autocomplete="off" value="'+(manualCVActive?manualCVText:cv)+'" oninput="setManualCV(this.value)" style="width:180px;margin:0;text-align:right" title="Edit CV manually"><button type="button" class="secondary" onclick="resetManualCV()" style="padding:6px 10px;margin:0" title="Use calculated CV">Auto</button></div></div>';
+ html+='<div class="result"><span>Total Incidence</span><b id="cvv_incidence">'+incidence.toFixed(4)+'%</b></div>';
+ html+='<div class="result"><span>CD</span><b id="cvv_cd">'+money(cd)+'</b></div>';
+ html+='<div class="result"><span>ACD</span><b id="cvv_acd">'+money(acd)+'</b></div>';
+ html+='<div class="result"><span>RD</span><b id="cvv_rd">'+money(rd)+'</b></div>';
+ html+='<div class="result"><span>ST</span><b id="cvv_st">'+money(st)+'</b></div>';
+ html+='<div class="result"><span>AST</span><b id="cvv_ast">'+money(ast)+'</b></div>';
+ if(gstMode) html+='<div class="result"><span>GST</span><b id="cvv_gst">'+money(gst)+'</b></div>';
+ html+='<div class="result"><span>IT</span><b id="cvv_it">'+money(it)+'</b></div>';
+ html+='<div class="result total"><span>Total Duties & Taxes</span><b id="cvv_total">'+money(total)+'</b></div>';
  document.getElementById('breakdown').innerHTML=html;
  if(document.getElementById('differenceView').style.display!=='none') calcDifference();
 }
