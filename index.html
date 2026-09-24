@@ -343,7 +343,10 @@ let diffRightHsCode='';
 let diffLeftSpecial={pak_china_fta_cd:null,income_tax_exemption_first_schedule_ii:null};
 let diffRightSpecial={pak_china_fta_cd:null,income_tax_exemption_first_schedule_ii:null};
 function ratesForSide(prefix){
- if(document.getElementById('differentHsMode')?.checked) return prefix==='l' ? diffLeftRates : diffRightRates;
+ // The Duty Difference Calculator always uses its own editable rate stores.
+ // This is important for FTA/Commercial toggles: the displayed rate and the
+ // rate actually used in the calculation must be the same value.
+ if(document.getElementById('differenceView')?.style.display!=='none') return prefix==='l' ? diffLeftRates : diffRightRates;
  return rates;
 }
 function sideCalculation(prefix){
@@ -484,7 +487,7 @@ function calc(){
  const total=cd+acd+rd+st+ast+gst+it;
  const incidence=cv>0 ? (total/cv)*100 : 0;
  const rows=[['Customs Value (CV)',cv],['CD',cd],['ACD',acd],['RD',rd],['ST',st],['AST',ast],...(gstMode?[['GST',gst]]:[]),['IT',it],['Total Duties & Taxes',total]];
- let html='<div class="result"><span>Customs Value (CV)</span><div style="display:flex;align-items:center;gap:8px;justify-content:flex-end"><input id="breakdownCV" type="text" inputmode="decimal" autocomplete="off" value="'+(manualCVActive?manualCVText:cv)+'" oninput="setManualCV(this.value)" style="width:180px;margin:0;text-align:right" title="Edit CV manually"><button type="button" class="secondary" onclick="resetManualCV()" style="padding:6px 10px;margin:0" title="Use calculated CV">Auto</button></div></div>';
+ let html='<div class="result"><span>Customs Value (CV)</span><div style="display:flex;align-items:center;gap:8px;justify-content:flex-end"><input id="breakdownCV" type="text" inputmode="decimal" autocomplete="off" value="'+(manualCVActive?manualCVText:cv)+'" oninput="setManualCV(this.value)" style="width:180px;margin:0;text-align:right" title="Edit CV manually"></div></div>';
  html+='<div class="result"><span>Total Incidence</span><b id="cvv_incidence">'+incidence.toFixed(4)+'%</b></div>';
  html+='<div class="result"><span>CD</span><b id="cvv_cd">'+money(cd)+'</b></div>';
  html+='<div class="result"><span>ACD</span><b id="cvv_acd">'+money(acd)+'</b></div>';
