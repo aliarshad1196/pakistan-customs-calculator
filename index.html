@@ -71,7 +71,7 @@ details[open] summary:after{content:"−"}
 <div class="sub">Online TIPP tariff lookup • FY 2026–27</div>
 <div class="hero-badge">🇵🇰  Customs • TIPP • CPFTA</div>
 <label>HS / PCT Code</label>
-<input id="hs" inputmode="numeric" placeholder="e.g. 9503.0090">
+<input id="hs" inputmode="decimal" placeholder="e.g. 9503.0090">
 <button id="fetchBtn" onclick="fetchTariff()">Fetch TIPP Rates</button>
 <div id="status" class="status"></div>
 <div id="commodity"></div>
@@ -98,9 +98,9 @@ details[open] summary:after{content:"−"}
 <div class="card">
 <div class="section-head"><h2>Import Details</h2><span class="section-note">Enter shipment values</span></div>
 <div class="grid">
-<div><label>Quantity</label><input id="qty" type="number" step="any" value="1" oninput="calc()"></div>
-<div><label>Unit Price</label><input id="price" type="number" step="any" value="0" oninput="calc()"></div>
-<div><label>Exchange Rate</label><input id="fx" type="number" step="any" value="280" oninput="calc()"></div>
+<div><label>Quantity</label><input id="qty" type="number" inputmode="decimal" step="any" value="1" oninput="calc()"></div>
+<div><label>Unit Price</label><input id="price" type="number" inputmode="decimal" step="any" value="0" oninput="calc()"></div>
+<div><label>Exchange Rate</label><input id="fx" type="number" inputmode="decimal" step="any" value="280" oninput="calc()"></div>
 </div>
 <button class="secondary" onclick="calc()">Calculate</button>
 </div>
@@ -122,19 +122,19 @@ details[open] summary:after{content:"−"}
 </div>
 <div id="diffHsControls" style="margin-bottom:14px">
 <label>HS / PCT Code</label>
-<div style="display:flex;gap:8px"><input id="diffSameHs" inputmode="numeric" placeholder="e.g. 9503.0090"><button id="diffSameFetch" type="button" onclick="fetchDifferenceSameHS()" style="margin-top:0;white-space:nowrap">Fetch TIPP Rates</button></div>
+<div style="display:flex;gap:8px"><input id="diffSameHs" inputmode="decimal" placeholder="e.g. 9503.0090"><button id="diffSameFetch" type="button" onclick="fetchDifferenceSameHS()" style="margin-top:0;white-space:nowrap">Fetch TIPP Rates</button></div>
 <div id="diffSameStatus" class="status"></div>
 </div>
 <div id="differentHsControls" style="display:none;margin-bottom:14px">
 <div class="compare-grid" style="margin:0">
 <div class="compare-card" style="padding:12px">
 <label>Left Side HS / PCT Code</label>
-<div style="display:flex;gap:8px"><input id="diffLeftHs" inputmode="numeric" placeholder="e.g. 9503.0090"><button id="diffLeftFetch" type="button" onclick="fetchDifferenceLeftHS()" style="margin-top:0;white-space:nowrap">Fetch Left TIPP Rates</button></div>
+<div style="display:flex;gap:8px"><input id="diffLeftHs" inputmode="decimal" placeholder="e.g. 9503.0090"><button id="diffLeftFetch" type="button" onclick="fetchDifferenceLeftHS()" style="margin-top:0;white-space:nowrap">Fetch Left TIPP Rates</button></div>
 <div id="diffLeftStatus" class="status"></div>
 </div>
 <div class="compare-card" style="padding:12px">
 <label>Right Side HS / PCT Code</label>
-<div style="display:flex;gap:8px"><input id="diffRightHs" inputmode="numeric" placeholder="e.g. 8711.4010"><button id="diffRightFetch" type="button" onclick="fetchDifferenceRightHS()" style="margin-top:0;white-space:nowrap">Fetch Right TIPP Rates</button></div>
+<div style="display:flex;gap:8px"><input id="diffRightHs" inputmode="decimal" placeholder="e.g. 8711.4010"><button id="diffRightFetch" type="button" onclick="fetchDifferenceRightHS()" style="margin-top:0;white-space:nowrap">Fetch Right TIPP Rates</button></div>
 <div id="diffRightStatus" class="status"></div>
 </div>
 </div>
@@ -144,9 +144,9 @@ details[open] summary:after{content:"−"}
 <h3>Left Side</h3>
 <div id="leftRates" class="rates" style="margin-bottom:14px"><small>Fetch an HS/PCT code to load editable rates.</small></div>
 <div class="grid">
-<div><label>Quantity</label><input id="lqty" type="number" step="any" value="1" oninput="calcDifference()"></div>
-<div><label>Unit Price</label><input id="lprice" type="number" step="any" value="0" oninput="calcDifference()"></div>
-<div><label>Exchange Rate</label><input id="lfx" type="number" step="any" value="280" oninput="calcDifference()"></div>
+<div><label>Quantity</label><input id="lqty" type="number" inputmode="decimal" step="any" value="1" oninput="calcDifference()"></div>
+<div><label>Unit Price</label><input id="lprice" type="number" inputmode="decimal" step="any" value="0" oninput="calcDifference()"></div>
+<div><label>Exchange Rate</label><input id="lfx" type="number" inputmode="decimal" step="any" value="280" oninput="calcDifference()"></div>
 </div>
 <div id="leftBreakdown"></div>
 </div>
@@ -154,9 +154,9 @@ details[open] summary:after{content:"−"}
 <h3>Right Side</h3>
 <div id="rightRates" class="rates" style="margin-bottom:14px"><small>Fetch an HS/PCT code to load editable rates.</small></div>
 <div class="grid">
-<div><label>Quantity</label><input id="rqty" type="number" step="any" value="1" oninput="calcDifference()"></div>
-<div><label>Unit Price</label><input id="rprice" type="number" step="any" value="0" oninput="calcDifference()"></div>
-<div><label>Exchange Rate</label><input id="rfx" type="number" step="any" value="280" oninput="calcDifference()"></div>
+<div><label>Quantity</label><input id="rqty" type="number" inputmode="decimal" step="any" value="1" oninput="calcDifference()"></div>
+<div><label>Unit Price</label><input id="rprice" type="number" inputmode="decimal" step="any" value="0" oninput="calcDifference()"></div>
+<div><label>Exchange Rate</label><input id="rfx" type="number" inputmode="decimal" step="any" value="280" oninput="calcDifference()"></div>
 </div>
 <div id="rightBreakdown"></div>
 </div>
@@ -209,7 +209,7 @@ async function fetchTariff(){
       if(x[1]==='cd') extra='<label class="rate-option"><input id="fta" type="checkbox" onchange="applyOptions()"> FTA</label>';
       if(x[1]==='ast') extra='<button class="ast-toggle" type="button" onclick="toggleAST()">AST ▾</button>';
       if(x[1]==='it') extra='<label class="rate-option"><input id="incomeTaxCommercial" type="checkbox" checked onchange="applyOptions()"> Commercial</label>';
-      return '<div class="rate"><div class="rate-head"><b>'+x[0]+' Rate (%)</b>'+extra+'</div><input id="rate_'+x[1]+'" type="number" min="0" step="0.01" value="'+(Number(rates[x[1]])*100)+'" oninput="syncManualRate(\''+x[1]+'\')"></div>';
+      return '<div class="rate"><div class="rate-head"><b>'+x[0]+' Rate (%)</b>'+extra+'</div><input id="rate_'+x[1]+'" type="number" inputmode="decimal" min="0" step="0.01" value="'+(Number(rates[x[1]])*100)+'" oninput="syncManualRate(\''+x[1]+'\')"></div>';
     }).join('');
    document.getElementById('options').style.display='block';
    const ftaBox=document.getElementById('fta');
@@ -288,14 +288,32 @@ function toggleAST(){
 }
 let manualCVActive=false;
 let manualCVValue=0;
+let manualCVText='';
 function setManualCV(value){
+ const el=document.getElementById('breakdownCV');
+ const start=el && typeof el.selectionStart==='number' ? el.selectionStart : null;
+ const end=el && typeof el.selectionEnd==='number' ? el.selectionEnd : null;
  manualCVActive=true;
- manualCVValue=Number(value||0);
+ manualCVText=String(value ?? '');
+ manualCVValue=manualCVText.trim()==='' ? 0 : Number(manualCVText);
  calc();
+ // calc() rebuilds the breakdown. Put focus back immediately so typing is seamless.
+ requestAnimationFrame(()=>{
+   const next=document.getElementById('breakdownCV');
+   if(next){
+     next.focus();
+     if(start!==null){
+       const pos=Math.min(start,next.value.length);
+       const posEnd=Math.min(end===null?pos:end,next.value.length);
+       try{next.setSelectionRange(pos,posEnd);}catch(_){}
+     }
+   }
+ });
 }
 function resetManualCV(){
  manualCVActive=false;
  manualCVValue=0;
+ manualCVText='';
  calc();
 }
 function toggleGST(){
@@ -406,7 +424,7 @@ function renderDifferenceRates(prefix){
    if(x[1]==='cd') extra='<label class="rate-option"><input id="'+prefix+'fta" type="checkbox" '+(sp.pak_china_fta_cd===null?'disabled':'')+' onchange="applyDifferenceOption(\''+prefix+'\',\'fta\')"> FTA</label>';
    if(x[1]==='ast') extra='<button class="ast-toggle" type="button" onclick="toggleDifferenceAST(\''+prefix+'\')">AST ▾</button>';
    if(x[1]==='it') extra='<label class="rate-option"><input id="'+prefix+'incomeTaxCommercial" type="checkbox" checked '+(sp.income_tax_exemption_first_schedule_ii===null?'disabled':'')+' onchange="applyDifferenceOption(\''+prefix+'\',\'it\')"> Commercial</label>';
-   return '<div class="rate"><div class="rate-head"><b>'+x[0]+' Rate (%)</b>'+extra+'</div><input id="'+prefix+'rate_'+x[1]+'" type="number" min="0" step="0.01" value="'+(Number(rr[x[1]])*100)+'" oninput="syncDifferenceRate(\''+prefix+'\',\''+x[1]+'\')"></div>';
+   return '<div class="rate"><div class="rate-head"><b>'+x[0]+' Rate (%)</b>'+extra+'</div><input id="'+prefix+'rate_'+x[1]+'" type="number" inputmode="decimal" min="0" step="0.01" value="'+(Number(rr[x[1]])*100)+'" oninput="syncDifferenceRate(\''+prefix+'\',\''+x[1]+'\')"></div>';
  }).join('');
 }
 function syncDifferenceRate(prefix,key){
@@ -463,7 +481,7 @@ function calc(){
  const total=cd+acd+rd+st+ast+gst+it;
  const incidence=cv>0 ? (total/cv)*100 : 0;
  const rows=[['Customs Value (CV)',cv],['CD',cd],['ACD',acd],['RD',rd],['ST',st],['AST',ast],...(gstMode?[['GST',gst]]:[]),['IT',it],['Total Duties & Taxes',total]];
- let html='<div class="result"><span>Customs Value (CV)</span><div style="display:flex;align-items:center;gap:8px;justify-content:flex-end"><input id="breakdownCV" type="number" step="any" value="'+(manualCVActive?manualCVValue:cv)+'" oninput="setManualCV(this.value)" style="width:180px;margin:0;text-align:right" title="Edit CV manually"><button type="button" class="secondary" onclick="resetManualCV()" style="padding:6px 10px;margin:0" title="Use calculated CV">Auto</button></div></div>';
+ let html='<div class="result"><span>Customs Value (CV)</span><div style="display:flex;align-items:center;gap:8px;justify-content:flex-end"><input id="breakdownCV" type="number" inputmode="decimal" step="any" value="'+(manualCVActive?manualCVText:cv)+'" oninput="setManualCV(this.value)" style="width:180px;margin:0;text-align:right" title="Edit CV manually"><button type="button" class="secondary" onclick="resetManualCV()" style="padding:6px 10px;margin:0" title="Use calculated CV">Auto</button></div></div>';
  html+='<div class="result"><span>Total Incidence</span><b>'+incidence.toFixed(4)+'%</b></div>';
  html+=rows.slice(1).map((r,i)=>'<div class="result '+((i+1)>=7?'total':'')+'"><span>'+r[0]+'</span><b>'+money(r[1])+'</b></div>').join('');
  document.getElementById('breakdown').innerHTML=html;
