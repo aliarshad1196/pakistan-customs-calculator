@@ -49,6 +49,7 @@ VERIFIED_RECORD_IDS = {
     # the corresponding current TIPP detail records.
     "871140100000": "22712",
     "721911000000": "19708",
+    "570339900000": "26954",
 }
 
 
