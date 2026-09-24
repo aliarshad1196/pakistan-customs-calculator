@@ -142,6 +142,7 @@ details[open] summary:after{content:"−"}
 <div class="compare-grid">
 <div class="compare-card">
 <h3>Left Side</h3>
+<div id="leftRates" class="rates" style="margin-bottom:14px"><small>Fetch an HS/PCT code to load editable rates.</small></div>
 <div class="grid">
 <div><label>Quantity</label><input id="lqty" type="number" step="any" value="1" oninput="calcDifference()"></div>
 <div><label>Unit Price</label><input id="lprice" type="number" step="any" value="0" oninput="calcDifference()"></div>
@@ -151,6 +152,7 @@ details[open] summary:after{content:"−"}
 </div>
 <div class="compare-card">
 <h3>Right Side</h3>
+<div id="rightRates" class="rates" style="margin-bottom:14px"><small>Fetch an HS/PCT code to load editable rates.</small></div>
 <div class="grid">
 <div><label>Quantity</label><input id="rqty" type="number" step="any" value="1" oninput="calcDifference()"></div>
 <div><label>Unit Price</label><input id="rprice" type="number" step="any" value="0" oninput="calcDifference()"></div>
@@ -317,6 +319,8 @@ let diffRightRates={...rates};
 let diffSameHsCode='';
 let diffLeftHsCode='';
 let diffRightHsCode='';
+let diffLeftSpecial={pak_china_fta_cd:null,income_tax_exemption_first_schedule_ii:null};
+let diffRightSpecial={pak_china_fta_cd:null,income_tax_exemption_first_schedule_ii:null};
 function ratesForSide(prefix){
  if(document.getElementById('differentHsMode')?.checked) return prefix==='l' ? diffLeftRates : diffRightRates;
  return rates;
@@ -355,7 +359,9 @@ async function fetchDifferenceLeftHS(){
  try{
    const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}));
    const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
-   diffLeftRates={cd:Number(d.rates.cd||0),acd:Number(d.rates.acd||0),rd:Number(d.rates.rd||0),st:Number(d.rates.st||0),ast:Number(d.rates.ast||0),it:Number(d.rates.it||0)}; diffLeftHsCode=hs;
+   diffLeftRates={cd:Number(d.rates.cd||0),acd:Number(d.rates.acd||0),rd:Number(d.rates.rd||0),st:Number(d.rates.st||0),ast:Number(d.rates.ast||0),it:Number(d.rates.it||0)};
+   diffLeftSpecial={pak_china_fta_cd:d.special_rates?.pak_china_fta_cd ?? null,income_tax_exemption_first_schedule_ii:d.special_rates?.income_tax_exemption_first_schedule_ii ?? null};
+   diffLeftRates._tippCd=diffLeftRates.cd; diffLeftRates._tippIt=diffLeftRates.it; diffLeftHsCode=hs; renderDifferenceRates('l');
    st.textContent='Loaded '+(d.code||hs)+' tariff rates for left side.'; calcDifference();
  }catch(e){st.textContent='Error: '+e.message;} finally{setFetchBusy('diffLeftFetch',false,'Fetch Left TIPP Rates');}
 }
@@ -367,7 +373,10 @@ async function fetchDifferenceSameHS(){
    const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}));
    const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
    rates.cd=Number(d.rates.cd||0); rates.acd=Number(d.rates.acd||0); rates.rd=Number(d.rates.rd||0); rates.st=Number(d.rates.st||0); rates.ast=Number(d.rates.ast||0); rates.it=Number(d.rates.it||0);
-   Object.assign(tippRates,rates); diffRightRates={...rates}; diffSameHsCode=hs;
+   Object.assign(tippRates,rates); diffLeftRates={...rates}; diffRightRates={...rates};
+   diffLeftSpecial={pak_china_fta_cd:d.special_rates?.pak_china_fta_cd ?? null,income_tax_exemption_first_schedule_ii:d.special_rates?.income_tax_exemption_first_schedule_ii ?? null};
+   diffRightSpecial={...diffLeftSpecial}; diffLeftRates._tippCd=diffLeftRates.cd; diffLeftRates._tippIt=diffLeftRates.it; diffRightRates._tippCd=diffRightRates.cd; diffRightRates._tippIt=diffRightRates.it; diffSameHsCode=hs;
+   renderDifferenceRates('l'); renderDifferenceRates('r');
    st.textContent='Loaded '+(d.code||hs)+' tariff rates for both sides.'; calcDifference();
  }catch(e){st.textContent='Error: '+e.message;} finally{setFetchBusy('diffSameFetch',false,'Fetch TIPP Rates');}
 }
@@ -378,9 +387,53 @@ async function fetchDifferenceRightHS(){
  try{
    const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}));
    const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
-   diffRightRates={cd:Number(d.rates.cd||0),acd:Number(d.rates.acd||0),rd:Number(d.rates.rd||0),st:Number(d.rates.st||0),ast:Number(d.rates.ast||0),it:Number(d.rates.it||0)}; diffRightHsCode=hs;
+   diffRightRates={cd:Number(d.rates.cd||0),acd:Number(d.rates.acd||0),rd:Number(d.rates.rd||0),st:Number(d.rates.st||0),ast:Number(d.rates.ast||0),it:Number(d.rates.it||0)};
+   diffRightSpecial={pak_china_fta_cd:d.special_rates?.pak_china_fta_cd ?? null,income_tax_exemption_first_schedule_ii:d.special_rates?.income_tax_exemption_first_schedule_ii ?? null};
+   diffRightRates._tippCd=diffRightRates.cd; diffRightRates._tippIt=diffRightRates.it; diffRightHsCode=hs; renderDifferenceRates('r');
    st.textContent='Loaded '+(d.code||hs)+' tariff rates for right side.'; calcDifference();
  }catch(e){st.textContent='Error: '+e.message;} finally{setFetchBusy('diffRightFetch',false,'Fetch Right TIPP Rates');}
+}
+function diffRateStore(prefix){ return prefix==='l'?diffLeftRates:diffRightRates; }
+function diffSpecialStore(prefix){ return prefix==='l'?diffLeftSpecial:diffRightSpecial; }
+function renderDifferenceRates(prefix){
+ const box=document.getElementById(prefix==='l'?'leftRates':'rightRates');
+ if(!box) return;
+ const rr=diffRateStore(prefix), sp=diffSpecialStore(prefix);
+ const side=prefix==='l'?'Left':'Right';
+ const fields=[['CD','cd'],['ACD','acd'],['RD','rd'],['ST','st'],['AST','ast'],['IT','it']];
+ box.innerHTML=fields.map(x=>{
+   let extra='';
+   if(x[1]==='cd') extra='<label class="rate-option"><input id="'+prefix+'fta" type="checkbox" '+(sp.pak_china_fta_cd===null?'disabled':'')+' onchange="applyDifferenceOption(\''+prefix+'\',\'fta\')"> FTA</label>';
+   if(x[1]==='ast') extra='<button class="ast-toggle" type="button" onclick="toggleDifferenceAST(\''+prefix+'\')">AST ▾</button>';
+   if(x[1]==='it') extra='<label class="rate-option"><input id="'+prefix+'incomeTaxCommercial" type="checkbox" '+(sp.income_tax_exemption_first_schedule_ii===null?'disabled':'')+' onchange="applyDifferenceOption(\''+prefix+'\',\'it\')"> Commercial</label>';
+   return '<div class="rate"><div class="rate-head"><b>'+x[0]+' Rate (%)</b>'+extra+'</div><input id="'+prefix+'rate_'+x[1]+'" type="number" min="0" step="0.01" value="'+(Number(rr[x[1]])*100)+'" oninput="syncDifferenceRate(\''+prefix+'\',\''+x[1]+'\')"></div>';
+ }).join('');
+}
+function syncDifferenceRate(prefix,key){
+ const el=document.getElementById(prefix+'rate_'+key); if(!el)return;
+ diffRateStore(prefix)[key]=Math.max(0,Number(el.value||0))/100; calcDifference();
+}
+function applyDifferenceOption(prefix,key){
+ const rr=diffRateStore(prefix), sp=diffSpecialStore(prefix);
+ if(key==='fta'){
+   const box=document.getElementById(prefix+'fta');
+   if(box?.checked && sp.pak_china_fta_cd!==null) rr.cd=Number(sp.pak_china_fta_cd);
+   else if(box && !box.disabled) rr.cd=rr._tippCd ?? rr.cd;
+   const el=document.getElementById(prefix+'rate_cd'); if(el) el.value=(rr.cd*100).toString();
+ }
+ if(key==='it'){
+   const box=document.getElementById(prefix+'incomeTaxCommercial');
+   if(box?.checked && sp.income_tax_exemption_first_schedule_ii!==null) rr.it=Number(sp.income_tax_exemption_first_schedule_ii);
+   else if(box && !box.disabled) rr.it=rr._tippIt ?? rr.it;
+   const el=document.getElementById(prefix+'rate_it'); if(el) el.value=(rr.it*100).toString();
+ }
+ calcDifference();
+}
+function toggleDifferenceAST(prefix){
+ const el=document.getElementById(prefix+'rate_ast');
+ if(!el)return;
+ const current=Number(el.value||0);
+ el.focus();
 }
 function renderSide(id,d){
  const rows=[['Customs Value (CV)',d.cv],['CD',d.cd],['ACD',d.acd],['RD',d.rd],['ST',d.st],['AST',d.ast],...(gstMode?[['GST',d.gst]]:[]),['IT',d.it],['Total Duties & Taxes',d.total]];
