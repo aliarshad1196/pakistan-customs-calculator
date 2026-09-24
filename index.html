@@ -24,7 +24,7 @@ input{width:100%;padding:13px 14px;border:1px solid #d6dee8;border-radius:12px;f
 input:focus{border-color:#6ea3ee;box-shadow:0 0 0 4px rgba(23,105,224,.10)}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 button{width:100%;border:0;border-radius:12px;padding:14px 16px;font-size:15px;font-weight:800;cursor:pointer;background:linear-gradient(135deg,var(--blue),var(--blue2));color:#fff;margin-top:12px;box-shadow:0 8px 18px rgba(23,105,224,.20);transition:transform .15s,box-shadow .15s}
-button:hover{transform:translateY(-1px);box-shadow:0 10px 22px rgba(23,105,224,.24)}
+button:hover{transform:translateY(-1px);box-shadow:0 10px 22px rgba(23,105,224,.24)}button.loading{opacity:.88;cursor:wait;transform:none!important}.spinner{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.38);border-top-color:#fff;border-radius:50%;vertical-align:-3px;margin-right:8px;animation:spin .75s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 button.secondary{background:#edf4ff;color:#1259c4;box-shadow:none;border:1px solid #d7e6fb}
 .status{font-size:12px;margin-top:9px;color:var(--muted);line-height:1.5}
 #commodity{margin-top:10px;padding:11px 12px;border-radius:12px;background:#f5f9ff;border:1px solid #e0ebfb;color:#31506f;font-size:13px}
@@ -72,7 +72,7 @@ details[open] summary:after{content:"−"}
 <div class="hero-badge">🇵🇰  Customs • TIPP • CPFTA</div>
 <label>HS / PCT Code</label>
 <input id="hs" inputmode="numeric" placeholder="e.g. 9503.0090">
-<button onclick="fetchTariff()">Fetch TIPP Rates</button>
+<button id="fetchBtn" onclick="fetchTariff()">Fetch TIPP Rates</button>
 <div id="status" class="status"></div>
 <div id="commodity"></div>
 <div class="section-head" style="margin-top:18px;margin-bottom:0"><h2 style="font-size:15px">Duty & Tax Rates</h2><span class="section-note">Editable</span></div>
@@ -162,7 +162,9 @@ async function readApiResponse(response){
 async function fetchTariff(){
  const hs=cleanHS(document.getElementById('hs').value);
  const status=document.getElementById('status');
+ const btn=document.getElementById('fetchBtn');
  if(!hs){status.textContent='Enter an HS/PCT code.';return}
+ if(btn){btn.disabled=true;btn.classList.add('loading');btn.innerHTML='<span class="spinner"></span>Fetching TIPP Rates…';}
  status.textContent='Fetching current TIPP tariff…';
  try{
    const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}).toString());
@@ -199,6 +201,7 @@ async function fetchTariff(){
    status.textContent='';
    calc();
  }catch(e){status.textContent='Error: '+e.message}
+ finally{if(btn){btn.disabled=false;btn.classList.remove('loading');btn.textContent='Fetch TIPP Rates';}}
 }
 function astFacts(){
  return {

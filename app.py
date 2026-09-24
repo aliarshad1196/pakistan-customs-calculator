@@ -122,81 +122,147 @@ def record_id_from_html(html, requested_code):
     return None
 
 
+def _extract_tipp_detail_ids_from_search_html(html, requested_code):
+    """Extract candidate TIPP detail IDs from a search-engine result page.
+
+    We never trust a search-engine result by itself. lookup() subsequently
+    downloads the TIPP detail page and verifies that the requested 12-digit
+    code is actually present on that page.
+    """
+    soup = BeautifulSoup(html or "", "html.parser")
+    compact = re.sub(r"[^0-9]", "", requested_code)
+    candidates = []
+
+    def add_candidate(href, context=""):
+        if not href:
+            return
+        href = (href.replace("&amp;", "&")
+                    .replace("\\u003d", "=")
+                    .replace("\\u0026", "&"))
+        # Google/Bing may wrap the destination URL in redirect parameters.
+        decoded = href
+        for _ in range(2):
+            from urllib.parse import unquote, parse_qs, urlparse
+            decoded = unquote(decoded)
+            parsed = urlparse(decoded)
+            qs = parse_qs(parsed.query)
+            for key in ("url", "u", "uddg"):
+                if qs.get(key):
+                    decoded = qs[key][0]
+                    break
+        if "tipp.gov.pk" not in decoded.lower():
+            return
+        rid = numeric_id_from_href(decoded)
+        if not rid:
+            return
+        ctx_digits = re.sub(r"[^0-9]", "", context or "")
+        score = 0
+        if compact in ctx_digits:
+            score += 10
+        if "tradeInfo/view" in decoded or "tradeInfo%2Fview" in decoded:
+            score += 5
+        candidates.append((score, rid))
+
+    for a in soup.find_all("a", href=True):
+        ctx = clean_text(a.get_text(" ", strip=True))
+        parent = a.parent
+        if parent:
+            ctx = clean_text(parent.get_text(" ", strip=True)) + " " + ctx
+        add_candidate(a.get("href"), ctx)
+
+    # Raw HTML catches result links that are encoded in script/JSON blobs.
+    for m in re.finditer(r'https?://[^"\'<> ]*tipp\.gov\.pk[^"\'<> ]+', html or "", re.I):
+        add_candidate(m.group(0), html[max(0, m.start()-500):m.end()+500])
+
+    seen = set()
+    out = []
+    for score, rid in sorted(candidates, key=lambda x: (-x[0], int(x[1]))):
+        if rid not in seen:
+            seen.add(rid)
+            out.append(rid)
+    return out
+
+
+def _search_engine_candidates(session, query):
+    """Return candidate TIPP detail IDs from several public search engines."""
+    endpoints = [
+        ("https://www.google.com/search", {"q": query, "num": "10"}),
+        ("https://www.bing.com/search", {"q": query, "count": "10"}),
+        ("https://html.duckduckgo.com/html/", {"q": query}),
+    ]
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36"}
+    for url, params in endpoints:
+        try:
+            r = session.get(url, params=params, timeout=20, headers=headers, verify=False)
+            if r.ok:
+                yield from _extract_tipp_detail_ids_from_search_html(r.text, query)
+        except requests.RequestException:
+            continue
+
+
 def search_tipp(session, tipp_code):
-    # First use a verified mapping where one exists. The tariff page is still
-    # downloaded live, so changes on TIPP are reflected automatically.
+    # First use a cached/verified mapping. The tariff page is always fetched
+    # live and is validated against the exact requested 12-digit HS code.
     if tipp_code in VERIFIED_RECORD_IDS:
         return VERIFIED_RECORD_IDS[tipp_code], "verified-record-map"
 
-    # TIPP has changed its search implementation over time. Try the common
-    # Yii field names with both GET and POST, and only accept a real record ID.
+    # TIPP's own public search has changed its Yii field names over time.
+    # Try the common variants with GET and POST and accept an ID only when it
+    # is actually exposed by the returned HTML.
     field_names = [
-        "Product[hscode]",
-        "Product[hs_code]",
-        "Product[hsCode]",
-        "SearchProduct[hscode]",
-        "SearchProduct[hs_code]",
-        "SearchProduct[hsCode]",
-        "TradeInfo[hscode]",
-        "TradeInfo[hs_code]",
-        "hscode",
-        "hs_code",
-        "HSCode",
-        "code",
+        "Product[hscode]", "Product[hs_code]", "Product[hsCode]",
+        "SearchProduct[hscode]", "SearchProduct[hs_code]", "SearchProduct[hsCode]",
+        "TradeInfo[hscode]", "TradeInfo[hs_code]", "TradeInfo[hsCode]",
+        "hscode", "hs_code", "HSCode", "code",
     ]
-
     last_status = "unknown"
-    search_url = f"{TIPP_BASE}?r=tradeInfo/searchProduct"
-
     for field in field_names:
         params = {"r": "tradeInfo/searchProduct", field: tipp_code}
         for method in ("get", "post"):
             try:
                 if method == "get":
-                    response = session.get(TIPP_BASE, params=params, timeout=25, verify=False)
+                    response = session.get(TIPP_BASE, params=params, timeout=20, verify=False)
                 else:
-                    response = session.post(TIPP_BASE, data=params, timeout=25, verify=False)
-
+                    response = session.post(TIPP_BASE, data=params, timeout=20, verify=False)
                 last_status = response.status_code
                 if not response.ok:
                     continue
-
                 record_id = record_id_from_html(response.text, tipp_code)
                 if record_id:
-                    return record_id, response.url
-
+                    return record_id, "tipp-search"
             except requests.RequestException:
                 continue
 
-    # Last-resort fallback: TIPP's public search page can return HTTP 200 without
-    # exposing the internal commodity ID. Search engines often have the indexed
-    # TIPP detail URL, which contains the ID. This is only a discovery fallback;
-    # tariff data is still fetched directly from TIPP after the ID is found.
-    search_queries = [
-        f'site:tipp.gov.pk/index.php "{tipp_code}" "Code" "r=tradeInfo/view"',
+    # Robust fallback for the current TIPP behaviour: discover the detail URL
+    # through multiple search engines, then validate the candidate against the
+    # LIVE TIPP detail page before accepting it. This is generic and does not
+    # require maintaining a one-off map for every HS code.
+    queries = [
         f'site:tipp.gov.pk/index.php "{tipp_code}" "Commodity"',
+        f'site:tipp.gov.pk/index.php "{tipp_code}" "Tariffs"',
+        f'site:tipp.gov.pk/index.php "{tipp_code}" "tradeInfo/view"',
     ]
-    for q in search_queries:
+    candidate_ids = []
+    for query in queries:
+        for rid in _search_engine_candidates(session, query):
+            if rid not in candidate_ids:
+                candidate_ids.append(rid)
+
+    # Validate here as well, so the caller receives only an ID belonging to the
+    # exact requested commodity.
+    for rid in candidate_ids:
         try:
-            bing = session.get("https://www.google.com/search", params={"q": q}, timeout=15,
-                               headers={"User-Agent": "Mozilla/5.0"}, verify=False)
-            if bing.ok:
-                record_id = record_id_from_html(bing.text, tipp_code)
-                if record_id:
-                    return record_id, "search-engine-fallback"
-                # Google result links may be wrapped; extract any direct TIPP URL.
-                for match in re.finditer(r'https?://(?:www\.)?tipp\.gov\.pk/index\.php[^\"<> ]+', bing.text):
-                    url = match.group(0).replace('\\u003d', '=').replace('\\u0026', '&')
-                    record_id = numeric_id_from_href(url)
-                    if record_id:
-                        return record_id, "search-engine-fallback"
+            detail_url = f"{TIPP_BASE}?id={quote_plus(str(rid))}&r=tradeInfo%2Fview&sort=rate"
+            detail = session.get(detail_url, timeout=25, verify=False)
+            if detail.ok and page_has_code(detail.text, tipp_code):
+                return str(rid), "search-engine-validated"
         except requests.RequestException:
-            pass
+            continue
 
     raise RuntimeError(
-        f"TIPP returned HTTP {last_status} but could not locate the commodity record for {tipp_code}. "
-        "TIPP's current public search page may return HTTP 200 without exposing the detail-record key. "
-        "Try the 8-digit PCT code again or use a current TIPP detail link."
+        f"TIPP returned HTTP {last_status} but could not resolve the exact commodity record for {tipp_code}. "
+        "The calculator tried TIPP's own search plus multiple public search indexes, "
+        "and only accepts a detail record after verifying the exact 12-digit HS code."
     )
 
 
