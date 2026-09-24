@@ -116,6 +116,20 @@ details[open] summary:after{content:"−"}
 <div id="differenceView" style="display:none">
 <div class="card">
 <div class="section-head"><h2>Duty Difference Calculator</h2><span class="section-note">Side-by-side comparison</span></div>
+<div style="display:flex;gap:18px;flex-wrap:wrap;margin:10px 0 14px">
+<label style="display:flex;align-items:center;gap:8px;margin:0;cursor:pointer"><input id="sameHsMode" type="checkbox" checked onchange="setDifferenceMode('same')" style="width:auto"> Same HS Code</label>
+<label style="display:flex;align-items:center;gap:8px;margin:0;cursor:pointer"><input id="differentHsMode" type="checkbox" onchange="setDifferenceMode('different')" style="width:auto"> Different HS Codes</label>
+</div>
+<div id="diffHsControls" style="margin-bottom:14px">
+<label>HS / PCT Code</label>
+<div style="display:flex;gap:8px"><input id="diffSameHs" inputmode="numeric" placeholder="e.g. 9503.0090"><button id="diffSameFetch" type="button" onclick="fetchDifferenceSameHS()" style="margin-top:0;white-space:nowrap">Fetch TIPP Rates</button></div>
+<div id="diffSameStatus" class="status"></div>
+</div>
+<div id="differentHsControls" style="display:none;margin-bottom:14px">
+<label>Right Side HS / PCT Code</label>
+<div style="display:flex;gap:8px"><input id="diffRightHs" inputmode="numeric" placeholder="e.g. 8711.4010"><button id="diffRightFetch" type="button" onclick="fetchDifferenceRightHS()" style="margin-top:0;white-space:nowrap">Fetch Right TIPP Rates</button></div>
+<div id="diffRightStatus" class="status"></div>
+</div>
 <div class="compare-grid">
 <div class="compare-card">
 <h3>Left Side</h3>
@@ -289,19 +303,59 @@ function switchTab(tab){
  document.getElementById('tabDiff').classList.toggle('active',!normal);
  if(!normal) calcDifference();
 }
+let diffRightRates={...rates};
+let diffSameHsCode='';
+let diffRightHsCode='';
+function ratesForSide(prefix){ return prefix==='r' && document.getElementById('differentHsMode')?.checked ? diffRightRates : rates; }
 function sideCalculation(prefix){
+ const rr=ratesForSide(prefix);
  const q=Number(document.getElementById(prefix+'qty').value||0);
  const p=Number(document.getElementById(prefix+'price').value||0);
  const fx=Number(document.getElementById(prefix+'fx').value||0);
  const cv=q*p*fx;
- const cd=cv*rates.cd, acd=cv*rates.acd, rd=cv*rates.rd;
- const st=(cv+cd+acd+rd)*rates.st;
- const ast=gstMode?0:(cv+cd+acd+rd)*rates.ast;
+ const cd=cv*rr.cd, acd=cv*rr.acd, rd=cv*rr.rd;
+ const st=(cv+cd+acd+rd)*rr.st;
+ const ast=gstMode?0:(cv+cd+acd+rd)*rr.ast;
  const gst=gstMode?st*0.39:0;
  const itBase=cv+cd+acd+rd+st+(gstMode?gst:ast);
- const it=itBase*rates.it;
+ const it=itBase*rr.it;
  const total=cd+acd+rd+st+ast+gst+it;
  return {cv,cd,acd,rd,st,ast,gst,it,total,incidence:cv>0?(total/cv)*100:0};
+}
+function setDifferenceMode(mode){
+ const same=mode==='same';
+ document.getElementById('sameHsMode').checked=same;
+ document.getElementById('differentHsMode').checked=!same;
+ document.getElementById('diffHsControls').style.display=same?'block':'none';
+ document.getElementById('differentHsControls').style.display=same?'none':'block';
+ if(same) diffRightRates={...rates};
+ calcDifference();
+}
+function setFetchBusy(id,busy,text){
+ const b=document.getElementById(id); if(!b)return; b.disabled=busy; b.innerHTML=busy?'<span class="spinner"></span> Fetching…':text;
+}
+async function fetchDifferenceSameHS(){
+ const hs=cleanHS(document.getElementById('diffSameHs').value);
+ const st=document.getElementById('diffSameStatus'); if(!hs){st.textContent='Enter an HS/PCT code.';return;}
+ setFetchBusy('diffSameFetch',true,'Fetch TIPP Rates'); st.textContent='Fetching current TIPP tariff…';
+ try{
+   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts(),importer_type:document.getElementById('importerType').value,schedule_part:document.getElementById('schedulePart').value,atl:document.getElementById('atl').checked?'1':'0'}));
+   const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
+   rates.cd=Number(d.rates.cd||0); rates.acd=Number(d.rates.acd||0); rates.rd=Number(d.rates.rd||0); rates.st=Number(d.rates.st||0); rates.ast=Number(d.rates.ast||0); rates.it=Number(d.rates.it||0);
+   Object.assign(tippRates,rates); diffRightRates={...rates}; diffSameHsCode=hs;
+   st.textContent='Loaded '+(d.code||hs)+' tariff rates for both sides.'; calcDifference();
+ }catch(e){st.textContent='Error: '+e.message;} finally{setFetchBusy('diffSameFetch',false,'Fetch TIPP Rates');}
+}
+async function fetchDifferenceRightHS(){
+ const hs=cleanHS(document.getElementById('diffRightHs').value);
+ const st=document.getElementById('diffRightStatus'); if(!hs){st.textContent='Enter the right-side HS/PCT code.';return;}
+ setFetchBusy('diffRightFetch',true,'Fetch Right TIPP Rates'); st.textContent='Fetching current TIPP tariff…';
+ try{
+   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts(),importer_type:document.getElementById('importerType').value,schedule_part:document.getElementById('schedulePart').value,atl:document.getElementById('atl').checked?'1':'0'}));
+   const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
+   diffRightRates={cd:Number(d.rates.cd||0),acd:Number(d.rates.acd||0),rd:Number(d.rates.rd||0),st:Number(d.rates.st||0),ast:Number(d.rates.ast||0),it:Number(d.rates.it||0)}; diffRightHsCode=hs;
+   st.textContent='Loaded '+(d.code||hs)+' tariff rates for right side.'; calcDifference();
+ }catch(e){st.textContent='Error: '+e.message;} finally{setFetchBusy('diffRightFetch',false,'Fetch Right TIPP Rates');}
 }
 function renderSide(id,d){
  const rows=[['Customs Value (CV)',d.cv],['CD',d.cd],['ACD',d.acd],['RD',d.rd],['ST',d.st],['AST',d.ast],...(gstMode?[['GST',d.gst]]:[]),['IT',d.it],['Total Duties & Taxes',d.total]];
