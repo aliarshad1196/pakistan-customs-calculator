@@ -88,10 +88,25 @@ def numeric_id_from_href(href):
     return match.group(1) if match else None
 
 
-def page_has_code(html, tipp_code):
+def page_has_code(html, tipp_code, prefix_code=None):
+    """Verify a TIPP detail page.
+
+    For a real 12-digit TIPP commodity we require the exact code.  For an
+    8-digit PCT entered by the user, TIPP may represent that PCT with one or
+    more 12-digit commodity records (for example 85362010 -> 853620101000).
+    In that case a detail record beginning with the requested 8-digit PCT is
+    a valid resolution.
+    """
+    text = BeautifulSoup(html, "html.parser").get_text(" ")
+    page_digits = re.sub(r"[^0-9]", "", text)
     compact = re.sub(r"[^0-9]", "", tipp_code)
-    page_digits = re.sub(r"[^0-9]", "", BeautifulSoup(html, "html.parser").get_text(" "))
-    return compact in page_digits
+    if compact in page_digits:
+        return True
+    if prefix_code:
+        prefix = re.sub(r"[^0-9]", "", prefix_code)
+        # Look for a 12-digit TIPP code beginning with the requested PCT.
+        return re.search(r"(?<!\d)" + re.escape(prefix) + r"\d{4}(?!\d)", text) is not None
+    return False
 
 
 def record_id_from_html(html, requested_code):
@@ -213,25 +228,26 @@ def _tipp_search_one(session, field, tipp_code):
         return []
 
 
-def _validate_tipp_id(session, rid, tipp_code):
+def _validate_tipp_id(session, rid, tipp_code, prefix_code=None):
     try:
         detail_url = f"{TIPP_BASE}?id={quote_plus(str(rid))}&r=tradeInfo%2Fview&sort=rate"
         detail = session.get(detail_url, timeout=6, verify=False)
-        if detail.ok and page_has_code(detail.text, tipp_code):
+        if detail.ok and page_has_code(detail.text, tipp_code, prefix_code=prefix_code):
             return str(rid)
     except requests.RequestException:
         pass
     return None
 
 
-def _search_tipp_external(session, tipp_code):
+def _search_tipp_external(session, tipp_code, prefix_code=None):
     """Last-resort public-web discovery, kept to one short request.
 
     This is deliberately a fallback only. TIPP itself remains authoritative;
     any discovered ID is validated against the live TIPP detail page.
     """
     import urllib.parse
-    q = urllib.parse.quote(f'site:tipp.gov.pk/index.php?id= "{tipp_code}" "tradeInfo"')
+    search_code = prefix_code or tipp_code
+    q = urllib.parse.quote(f'site:tipp.gov.pk/index.php?id= "{search_code}" "tradeInfo"')
     urls = [
         f"https://www.google.com/search?q={q}",
         f"https://www.bing.com/search?q={q}",
@@ -257,7 +273,7 @@ def _search_tipp_external(session, tipp_code):
     return ids[:4]
 
 
-def search_tipp(session, tipp_code):
+def search_tipp(session, tipp_code, prefix_code=None):
     """Universal TIPP resolver.
 
     1. Use the persistent seed map for already verified records.
@@ -297,9 +313,35 @@ def search_tipp(session, tipp_code):
                 except Exception:
                     pass
 
+    # Important: an 8-digit PCT is not always a literal 12-digit TIPP code.
+    # TIPP can store the same PCT under product-specific 12-digit records.
+    # If the caller supplied an 8-digit PCT, search the 8-digit prefix and
+    # accept a verified detail record whose TIPP code begins with that prefix.
+    if prefix_code and prefix_code != tipp_code:
+        prefix_candidates=[]
+        with ThreadPoolExecutor(max_workers=len(fields)) as pool:
+            futures=[pool.submit(_tipp_search_one, session, f, prefix_code) for f in fields]
+            for f in as_completed(futures):
+                try:
+                    for rid in f.result():
+                        if rid and str(rid) not in prefix_candidates:
+                            prefix_candidates.append(str(rid))
+                except Exception:
+                    pass
+        if prefix_candidates:
+            with ThreadPoolExecutor(max_workers=min(6,len(prefix_candidates))) as pool:
+                futures=[pool.submit(_validate_tipp_id, session,rid,tipp_code,prefix_code) for rid in prefix_candidates[:6]]
+                for f in as_completed(futures):
+                    try:
+                        rid=f.result()
+                        if rid:
+                            return rid,"tipp-prefix-search"
+                    except Exception:
+                        pass
+
     # Last resort: discover the detail URL from the public web, then validate.
-    for rid in _search_tipp_external(session,tipp_code):
-        valid=_validate_tipp_id(session,rid,tipp_code)
+    for rid in _search_tipp_external(session,tipp_code,prefix_code=prefix_code):
+        valid=_validate_tipp_id(session,rid,tipp_code,prefix_code=prefix_code)
         if valid:
             return valid,"web-discovery"
 
@@ -607,13 +649,13 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
         "Accept-Language": "en-US,en;q=0.9",
     })
 
-    record_id, resolution = search_tipp(session, tipp_code)
+    record_id, resolution = search_tipp(session, tipp_code, prefix_code=hs8)
     commodity_url = f"{TIPP_BASE}?id={quote_plus(str(record_id))}&r=tradeInfo%2Fview&sort=rate"
 
     response = session.get(commodity_url, timeout=30, verify=False)
     response.raise_for_status()
 
-    if not page_has_code(response.text, tipp_code):
+    if not page_has_code(response.text, tipp_code, prefix_code=hs8):
         raise RuntimeError(
             f"TIPP record {record_id} did not return the requested code {tipp_code}."
         )
