@@ -9,6 +9,8 @@ import urllib3
 from bs4 import BeautifulSoup
 import csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import json
+import threading
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -36,11 +38,53 @@ TIPP_BASE = "https://www.tipp.gov.pk/index.php"
 CPFTA_DATA_FILE = os.path.join(os.path.dirname(__file__), "data", "cpfta_rates.csv")
 CPFTA_SRO_URL = "https://download1.fbr.gov.pk/SROs/201912311712571769CPFTASRO1640%28I%29201931.12.2019.pdf"
 CPFTA_DATA_CACHE = None
+TIPP_INDEX_FILE = os.environ.get("TIPP_INDEX_FILE", os.path.join(os.path.dirname(__file__), "data", "tipp_record_index.json"))
+TIPP_INDEX_LOCK = threading.Lock()
 
 # TIPP's public product-search page exposes HS codes, but currently does not
 # reliably expose the commodity record ID needed by the detail page.
 # This is a verified live TIPP mapping for the test code we have been using.
 # The detail page itself is fetched live, so the tariff values are NOT hard-coded.
+def _load_tipp_index():
+    try:
+        with open(TIPP_INDEX_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def _save_tipp_mapping(hs8, tipp_code, record_id, resolution="tipp-search"):
+    if not hs8 or not tipp_code or not record_id:
+        return
+    os.makedirs(os.path.dirname(TIPP_INDEX_FILE), exist_ok=True)
+    with TIPP_INDEX_LOCK:
+        data = _load_tipp_index()
+        entry = data.setdefault(str(hs8), [])
+        item = {"tipp_code": str(tipp_code), "record_id": str(record_id), "resolution": resolution}
+        if not any(str(x.get("tipp_code")) == str(tipp_code) and str(x.get("record_id")) == str(record_id) for x in entry if isinstance(x, dict)):
+            entry.append(item)
+        tmp = TIPP_INDEX_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
+        os.replace(tmp, TIPP_INDEX_FILE)
+
+
+def _cached_tipp_ids(hs8, tipp_code):
+    data = _load_tipp_index()
+    rows = data.get(str(hs8), [])
+    out=[]
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        tc=str(row.get("tipp_code", ""))
+        if tc == str(tipp_code) or (len(str(tipp_code)) == 12 and tc.startswith(str(tipp_code)[:8])):
+            rid=str(row.get("record_id", ""))
+            if rid and rid not in out:
+                out.append(rid)
+    return out
+
+
 VERIFIED_RECORD_IDS = {
     "950300900000": "23226",
     "961590900000": "23343",
@@ -51,6 +95,7 @@ VERIFIED_RECORD_IDS = {
     "871140100000": "22712",
     "721911000000": "19708",
     "570339900000": "26954",
+    "630910100000": "19208",
 }
 
 
@@ -200,6 +245,42 @@ def _extract_tipp_detail_ids_from_search_html(html, requested_code):
     return out
 
 
+def _tradeinfo_index_one(session, field, code):
+    """Use TIPP's actual Search Commodity page before the older searchProduct page.
+
+    TIPP documents that its commodity search accepts 2/4/6/8/12 digit HS codes.
+    The application page is the authoritative resolver for a commodity lookup;
+    searchProduct is only a fallback because it often omits the detail-record link.
+    """
+    params = {"r": "tradeInfo/index", field: code}
+    try:
+        response = session.get(TIPP_BASE, params=params, timeout=7, verify=False, headers={"User-Agent":"Mozilla/5.0"})
+        if not response.ok:
+            return []
+        html=response.text
+        soup=BeautifulSoup(html, "html.parser")
+        wanted=re.sub(r"[^0-9]", "", str(code))
+        page_digits=re.sub(r"[^0-9]", "", soup.get_text(" "))
+        if wanted not in page_digits:
+            return []
+        ids=[]
+        for a in soup.find_all("a", href=True):
+            rid=numeric_id_from_href(a.get("href"))
+            if not rid:
+                continue
+            context=clean_text(a.parent.get_text(" ", strip=True)) if a.parent else ""
+            context_digits=re.sub(r"[^0-9]", "", context)
+            if wanted in context_digits or "tradeinfo/view" in a.get("href", "").lower():
+                if rid not in ids:
+                    ids.append(rid)
+        rid=record_id_from_html(html, code)
+        if rid and rid not in ids:
+            ids.insert(0,rid)
+        return ids
+    except requests.RequestException:
+        return []
+
+
 def _tipp_search_one(session, field, tipp_code):
     """Search TIPP using one possible filter-field name.
 
@@ -274,24 +355,62 @@ def _search_tipp_external(session, tipp_code, prefix_code=None):
 
 
 def search_tipp(session, tipp_code, prefix_code=None):
-    """Universal TIPP resolver.
+    """Universal, self-building TIPP resolver.
 
-    1. Use the persistent seed map for already verified records.
-    2. Try TIPP's actual search filter using multiple possible field names.
-    3. Validate every candidate against the exact 12-digit code on its detail page.
-    4. Only then use a tiny external-web fallback.
-
-    This means a new PCT is not required to be hard-coded into the application.
+    The cache is keyed by the 8-digit PCT and may contain multiple TIPP
+    12-digit commodity records. A lookup first uses the cache, then TIPP's
+    documented commodity-search page, then searchProduct, and finally the
+    small public-web fallback. Every accepted record is verified against the
+    live detail page and written to the local index.
     """
-    if tipp_code in VERIFIED_RECORD_IDS:
-        return VERIFIED_RECORD_IDS[tipp_code], "verified-record-map"
+    hs8 = re.sub(r"[^0-9]", "", prefix_code or tipp_code)[:8]
 
-    fields = [
+    # Seed mappings are also copied into the self-building index.
+    seed = VERIFIED_RECORD_IDS.get(tipp_code)
+    cached = _cached_tipp_ids(hs8, tipp_code)
+    candidate_ids=[]
+    if seed:
+        candidate_ids.append(str(seed))
+    for rid in cached:
+        if rid not in candidate_ids:
+            candidate_ids.append(rid)
+
+    # Validate cached/seed records first; this makes repeat lookups fast.
+    for rid in candidate_ids:
+        valid=_validate_tipp_id(session, rid, tipp_code, prefix_code=prefix_code)
+        if valid:
+            # For 8-digit input, the detail page may expose the actual 12-digit code.
+            _save_tipp_mapping(hs8, tipp_code if len(tipp_code)==12 else tipp_code, valid, "cache")
+            return valid, "cache"
+
+    fields=[
+        "TradeInfo[hscode]", "TradeInfo[hs_code]", "TradeInfo[hsCode]",
+        "TradeInfo[hscode1]", "hscode", "hs_code",
         "Product[hscode]", "Product[hs_code]", "Product[hsCode]",
         "Product[hs]", "Product[Hscode]", "ProductSearch[hscode]",
-        "ProductSearch[hs_code]", "hscode", "hs_code"
+        "ProductSearch[hs_code]",
     ]
-    candidate_ids=[]
+
+    # TIPP's own commodity search is tried with both the exact 12-digit code
+    # and the 8-digit PCT. This is the key fix: an 8-digit PCT is allowed to
+    # resolve to any matching 12-digit commodity record.
+    search_codes=[tipp_code]
+    if prefix_code and prefix_code != tipp_code:
+        search_codes.append(prefix_code)
+    with ThreadPoolExecutor(max_workers=min(12, len(fields)*len(search_codes))) as pool:
+        futures=[]
+        for code in search_codes:
+            for field in fields:
+                futures.append(pool.submit(_tradeinfo_index_one, session, field, code))
+        for f in as_completed(futures):
+            try:
+                for rid in f.result():
+                    if rid and str(rid) not in candidate_ids:
+                        candidate_ids.append(str(rid))
+            except Exception:
+                pass
+
+    # Older searchProduct endpoint as a fallback.
     with ThreadPoolExecutor(max_workers=len(fields)) as pool:
         futures=[pool.submit(_tipp_search_one, session, f, tipp_code) for f in fields]
         for f in as_completed(futures):
@@ -302,48 +421,37 @@ def search_tipp(session, tipp_code, prefix_code=None):
             except Exception:
                 pass
 
-    if candidate_ids:
-        with ThreadPoolExecutor(max_workers=min(6,len(candidate_ids))) as pool:
-            futures=[pool.submit(_validate_tipp_id, session,rid,tipp_code) for rid in candidate_ids[:6]]
-            for f in as_completed(futures):
-                try:
-                    rid=f.result()
-                    if rid:
-                        return rid,"tipp-search"
-                except Exception:
-                    pass
-
-    # Important: an 8-digit PCT is not always a literal 12-digit TIPP code.
-    # TIPP can store the same PCT under product-specific 12-digit records.
-    # If the caller supplied an 8-digit PCT, search the 8-digit prefix and
-    # accept a verified detail record whose TIPP code begins with that prefix.
     if prefix_code and prefix_code != tipp_code:
-        prefix_candidates=[]
         with ThreadPoolExecutor(max_workers=len(fields)) as pool:
             futures=[pool.submit(_tipp_search_one, session, f, prefix_code) for f in fields]
             for f in as_completed(futures):
                 try:
                     for rid in f.result():
-                        if rid and str(rid) not in prefix_candidates:
-                            prefix_candidates.append(str(rid))
+                        if rid and str(rid) not in candidate_ids:
+                            candidate_ids.append(str(rid))
                 except Exception:
                     pass
-        if prefix_candidates:
-            with ThreadPoolExecutor(max_workers=min(6,len(prefix_candidates))) as pool:
-                futures=[pool.submit(_validate_tipp_id, session,rid,tipp_code,prefix_code) for rid in prefix_candidates[:6]]
-                for f in as_completed(futures):
-                    try:
-                        rid=f.result()
-                        if rid:
-                            return rid,"tipp-prefix-search"
-                    except Exception:
-                        pass
 
-    # Last resort: discover the detail URL from the public web, then validate.
-    for rid in _search_tipp_external(session,tipp_code,prefix_code=prefix_code):
-        valid=_validate_tipp_id(session,rid,tipp_code,prefix_code=prefix_code)
+    # Verify a bounded number of candidates. For an 8-digit PCT, any verified
+    # TIPP commodity beginning with that PCT is acceptable.
+    if candidate_ids:
+        with ThreadPoolExecutor(max_workers=min(8, len(candidate_ids))) as pool:
+            futures=[pool.submit(_validate_tipp_id, session, rid, tipp_code, prefix_code=prefix_code) for rid in candidate_ids[:12]]
+            for f in as_completed(futures):
+                try:
+                    valid=f.result()
+                    if valid:
+                        _save_tipp_mapping(hs8, tipp_code, valid, "tipp-search")
+                        return valid, "tipp-search"
+                except Exception:
+                    pass
+
+    # Last resort: public-web discovery, still followed by exact verification.
+    for rid in _search_tipp_external(session, tipp_code, prefix_code=prefix_code):
+        valid=_validate_tipp_id(session, rid, tipp_code, prefix_code=prefix_code)
         if valid:
-            return valid,"web-discovery"
+            _save_tipp_mapping(hs8, tipp_code, valid, "web-discovery")
+            return valid, "web-discovery"
 
     raise RuntimeError(
         f"TIPP could not resolve the exact commodity record for {tipp_code}. "
