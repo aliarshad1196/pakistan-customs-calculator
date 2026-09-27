@@ -95,6 +95,7 @@ VERIFIED_RECORD_IDS = {
     "871140100000": "22712",
     "721911000000": "19708",
     "570339900000": "26954",
+    "560811000000": "18692",
     "630910100000": "19208",
 }
 
@@ -310,13 +311,24 @@ def _tipp_search_one(session, field, tipp_code):
 
 
 def _validate_tipp_id(session, rid, tipp_code, prefix_code=None):
-    try:
-        detail_url = f"{TIPP_BASE}?id={quote_plus(str(rid))}&r=tradeInfo%2Fview&sort=rate"
-        detail = session.get(detail_url, timeout=6, verify=False)
-        if detail.ok and page_has_code(detail.text, tipp_code, prefix_code=prefix_code):
-            return str(rid)
-    except requests.RequestException:
-        pass
+    # TIPP sometimes changes the default sort/query on its detail page.
+    # Try a few equivalent detail URLs before rejecting a valid record.
+    urls = [
+        f"{TIPP_BASE}?id={quote_plus(str(rid))}&r=tradeInfo%2Fview",
+        f"{TIPP_BASE}?id={quote_plus(str(rid))}&r=tradeInfo%2Fview&sort=rate",
+        f"{TIPP_BASE}?id={quote_plus(str(rid))}&r=tradeInfo%2Fview&sort=valid_from",
+        f"{TIPP_BASE}?id={quote_plus(str(rid))}&r=tradeInfo%2Fview&sort=groups.full_name.desc",
+    ]
+    headers={"User-Agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1"}
+    for detail_url in urls:
+        try:
+            detail = session.get(detail_url, timeout=7, verify=False, headers=headers, allow_redirects=True)
+            if not detail.ok:
+                continue
+            if page_has_code(detail.text, tipp_code, prefix_code=prefix_code):
+                return str(rid)
+        except requests.RequestException:
+            continue
     return None
 
 
@@ -328,11 +340,15 @@ def _search_tipp_external(session, tipp_code, prefix_code=None):
     """
     import urllib.parse
     search_code = prefix_code or tipp_code
-    q = urllib.parse.quote(f'site:tipp.gov.pk/index.php?id= "{search_code}" "tradeInfo"')
-    urls = [
-        f"https://www.google.com/search?q={q}",
-        f"https://www.bing.com/search?q={q}",
+    q = urllib.parse.quote(f'site:tipp.gov.pk "{search_code}" "tradeInfo/view"')
+    queries = [
+        f'site:tipp.gov.pk "{search_code}" "tradeInfo/view"',
+        f'site:tipp.gov.pk/index.php?id= "{search_code}"',
     ]
+    urls = []
+    for query in queries:
+        enc = urllib.parse.quote(query)
+        urls.extend([f"https://www.google.com/search?q={enc}", f"https://www.bing.com/search?q={enc}"])
     def one(url):
         try:
             r = session.get(url, timeout=4, verify=False, headers={"User-Agent":"Mozilla/5.0"})
