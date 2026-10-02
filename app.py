@@ -192,7 +192,14 @@ def _get_weboc_form(session, headers):
         return None, None, str(exc)
 
 
-def _weboc_search_once(session, hs8):
+def _weboc_search_once(hs8):
+    """Perform one completely fresh WeBOC Tariff & SROs search.
+
+    WeBOC uses ASP.NET ViewState and can issue a session-specific URL.  A
+    fresh Session is therefore created for every attempt and the exact
+    hidden fields from that GET are posted back to the same form action.
+    No tariff or income-tax percentages are embedded here.
+    """
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) "
@@ -202,79 +209,87 @@ def _weboc_search_once(session, hs8):
         "Referer": "https://www.weboc.gov.pk/",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
     }
-    tariff_url, form, error = _get_weboc_form(session, headers)
-    if error:
-        return None, error
-
-    data = {}
-    for inp in form.find_all("input"):
-        name = inp.get("name")
-        if not name:
-            continue
-        typ = (inp.get("type") or "text").lower()
-        if typ in {"hidden", "text", "search", "number"}:
-            data[name] = inp.get("value", "")
-
-    search_name = "TariffList$txtSearch"
-    search_button = "TariffList$btnSearch"
-    if search_name not in data:
-        for inp in form.find_all("input"):
-            ident = ((inp.get("name") or "") + " " + (inp.get("id") or "")).lower()
-            if (inp.get("type") or "text").lower() in {"text", "search"} and any(
-                k in ident for k in ("hscode", "pct", "hs_code", "search", "txtsearch")
-            ):
-                search_name = inp.get("name") or inp.get("id")
-                break
-    if not search_name:
-        return None, "WeBOC HS search field was not found"
-
-    # The public WeBOC page accepts dotted 8-digit PCTs.
-    data[search_name] = hs8[:4] + "." + hs8[4:]
-    if search_button in data or form.find("input", attrs={"name": search_button}):
-        data[search_button] = "Search"
-
-    action = urljoin(tariff_url, form.get("action") or tariff_url)
+    session = requests.Session()
+    session.headers.update(headers)
     try:
+        r = session.get(
+            WEBOC_TARIFF_URL,
+            timeout=(8, 20),
+            verify=False,
+            allow_redirects=True,
+        )
+        if not r.ok:
+            return None, f"WeBOC GET returned HTTP {r.status_code} ({r.url})"
+
+        soup = BeautifulSoup(r.text, "html.parser")
+        form = soup.find("form", id="form1") or soup.find("form")
+        if not form:
+            title = clean_text(soup.title.get_text(" ", strip=True)) if soup.title else ""
+            return None, f"WeBOC tariff form was not found (final URL: {r.url}; title: {title[:120]})"
+
+        data = {}
+        for inp in form.find_all("input"):
+            name = inp.get("name")
+            if not name:
+                continue
+            typ = (inp.get("type") or "text").lower()
+            if typ in {"hidden", "text", "search", "number"}:
+                data[name] = inp.get("value", "")
+
+        search_name = "TariffList$txtSearch"
+        if search_name not in data:
+            candidates = []
+            for inp in form.find_all("input"):
+                ident = ((inp.get("name") or "") + " " + (inp.get("id") or "")).lower()
+                typ = (inp.get("type") or "text").lower()
+                if typ in {"text", "search"} and any(k in ident for k in ("hscode", "pct", "hs_code", "search", "txtsearch")):
+                    candidates.append(inp.get("name") or inp.get("id"))
+            if candidates:
+                search_name = candidates[0]
+        if search_name not in data:
+            return None, "WeBOC HS search field was not found"
+
+        data[search_name] = hs8[:4] + "." + hs8[4:]
+        button = form.find("input", attrs={"name": "TariffList$btnSearch"})
+        if button:
+            data["TariffList$btnSearch"] = button.get("value", "Search")
+
+        action = urljoin(r.url, form.get("action") or r.url)
         post = session.post(
             action,
             data=data,
-            timeout=(5, 15),
+            timeout=(8, 25),
             verify=False,
-            headers={**headers, "Referer": tariff_url},
+            headers={**headers, "Referer": r.url},
             allow_redirects=True,
         )
+        if not post.ok:
+            return None, f"WeBOC POST returned HTTP {post.status_code} ({post.url})"
+
+        # Do not require one particular label before parsing.  WeBOC has
+        # changed whitespace/markup around these labels, while the actual
+        # Income Tax rows are what matter.
+        page_text = clean_text(BeautifulSoup(post.text, "html.parser").get_text(" ", strip=True))
+        if len(page_text) < 100:
+            return None, f"WeBOC returned an unexpectedly short page ({len(page_text)} chars; {post.url})"
+        return post.text, None
     except requests.RequestException as exc:
-        return None, str(exc)
-
-    if not post.ok:
-        return None, f"WeBOC returned HTTP {post.status_code} after HS search"
-
-    # Do not accept a generic landing page as a successful tariff response.
-    page_text = clean_text(BeautifulSoup(post.text, "html.parser").get_text(" ", strip=True)).lower()
-    if "tariff information" not in page_text and "exemptions / sros" not in page_text:
-        return None, "WeBOC search returned a page without tariff information"
-    return post.text, None
+        return None, f"WeBOC connection error: {exc}"
+    except Exception as exc:
+        return None, f"WeBOC parser/request error: {exc}"
 
 
-def _weboc_search_form(session, hs8):
-    """Query WeBOC with a fresh ASP.NET session.
-
-    Two attempts are allowed because an ASP.NET cookieless session can expire
-    between the initial GET and POST. No rate values are embedded here.
-    """
-    last_error = None
-    for _ in range(2):
-        # A fresh requests.Session gives WeBOC a fresh cookie/session each time.
-        if not isinstance(session, requests.Session):
-            session = requests.Session()
-        html, error = _weboc_search_once(session, hs8)
+def _weboc_search_form(_session, hs8):
+    """Try the live WeBOC tariff form twice, with independent sessions."""
+    errors = []
+    for attempt in range(2):
+        html, error = _weboc_search_once(hs8)
         if html:
             return html
-        last_error = error
-        session.cookies.clear()
-    return None
-
+        errors.append(f"attempt {attempt + 1}: {error or 'unknown error'}")
+    return None, "; ".join(errors)
 
 def weboc_income_tax_rates(session, hs8):
     """Fetch Commercial and Industrial Income Tax rates directly from WeBOC.
@@ -294,9 +309,13 @@ def weboc_income_tax_rates(session, hs8):
         result["error"] = "Invalid HS code"
         return result
     try:
-        html = _weboc_search_form(session, hs8)
+        html_result = _weboc_search_form(session, hs8)
+        if isinstance(html_result, tuple):
+            html, query_error = html_result
+        else:
+            html, query_error = html_result, None
         if not html:
-            result["error"] = "WeBOC tariff page could not be queried"
+            result["error"] = query_error or "WeBOC tariff page could not be queried"
             return result
         result.update(_parse_weboc_it_rates(html))
         if result.get("commercial") is None:
