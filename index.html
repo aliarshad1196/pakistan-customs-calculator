@@ -68,14 +68,14 @@ details[open] summary:after{content:"−"}
 <div id="normalView">
 <div class="card hero">
 <h1>Pakistan Customs Duty Calculator</h1>
-<div class="sub">Online TIPP tariff lookup • FY 2026–27</div>
-<div class="hero-badge">🇵🇰  Customs • TIPP • CPFTA</div>
+<div class="sub">Customs tariff rates 2026–2027</div>
+<div class="hero-badge">🇵🇰  Customs Tariff Rates</div>
 <label>HS / PCT Code</label>
 <input id="hs" inputmode="decimal" placeholder="e.g. 9503.0090">
-<button id="fetchBtn" onclick="fetchTariff()">Fetch TIPP Rates</button>
+<button id="fetchBtn" onclick="fetchTariff()">Fetch Duty Rates</button>
 <div id="status" class="status"></div>
 <div id="commodity"></div>
-<div class="section-head" style="margin-top:18px;margin-bottom:0"><h2 style="font-size:15px">Duty & Tax Rates</h2><span class="section-note">Editable</span></div>
+<div class="section-head" style="margin-top:18px;margin-bottom:0"><h2 style="font-size:15px">Duty & Tax Rates</h2></div>
 <div id="rates" class="rates"></div>
 <div id="options" class="options-card" style="display:none">
 <details id="astDetails">
@@ -122,19 +122,19 @@ details[open] summary:after{content:"−"}
 </div>
 <div id="diffHsControls" style="margin-bottom:14px">
 <label>HS / PCT Code</label>
-<div style="display:flex;gap:8px"><input id="diffSameHs" inputmode="decimal" placeholder="e.g. 9503.0090"><button id="diffSameFetch" type="button" onclick="fetchDifferenceSameHS()" style="margin-top:0;white-space:nowrap">Fetch TIPP Rates</button></div>
+<div style="display:flex;gap:8px"><input id="diffSameHs" inputmode="decimal" placeholder="e.g. 9503.0090"><button id="diffSameFetch" type="button" onclick="fetchDifferenceSameHS()" style="margin-top:0;white-space:nowrap">Fetch Duty Rates</button></div>
 <div id="diffSameStatus" class="status"></div>
 </div>
 <div id="differentHsControls" style="display:none;margin-bottom:14px">
 <div class="compare-grid" style="margin:0">
 <div class="compare-card" style="padding:12px">
 <label>Left Side HS / PCT Code</label>
-<div style="display:flex;gap:8px"><input id="diffLeftHs" inputmode="decimal" placeholder="e.g. 9503.0090"><button id="diffLeftFetch" type="button" onclick="fetchDifferenceLeftHS()" style="margin-top:0;white-space:nowrap">Fetch Left TIPP Rates</button></div>
+<div style="display:flex;gap:8px"><input id="diffLeftHs" inputmode="decimal" placeholder="e.g. 9503.0090"><button id="diffLeftFetch" type="button" onclick="fetchDifferenceLeftHS()" style="margin-top:0;white-space:nowrap">Fetch Left Duty Rates</button></div>
 <div id="diffLeftStatus" class="status"></div>
 </div>
 <div class="compare-card" style="padding:12px">
 <label>Right Side HS / PCT Code</label>
-<div style="display:flex;gap:8px"><input id="diffRightHs" inputmode="decimal" placeholder="e.g. 8711.4010"><button id="diffRightFetch" type="button" onclick="fetchDifferenceRightHS()" style="margin-top:0;white-space:nowrap">Fetch Right TIPP Rates</button></div>
+<div style="display:flex;gap:8px"><input id="diffRightHs" inputmode="decimal" placeholder="e.g. 8711.4010"><button id="diffRightFetch" type="button" onclick="fetchDifferenceRightHS()" style="margin-top:0;white-space:nowrap">Fetch Right Duty Rates</button></div>
 <div id="diffRightStatus" class="status"></div>
 </div>
 </div>
@@ -142,7 +142,7 @@ details[open] summary:after{content:"−"}
 <div class="compare-grid">
 <div class="compare-card">
 <h3>Left Side</h3>
-<div id="leftRates" class="rates" style="margin-bottom:14px"><small>Fetch an HS/PCT code to load editable rates.</small></div>
+<div id="leftRates" class="rates" style="margin-bottom:14px"><small>Fetch an HS/PCT code to load duty rates.</small></div>
 <div class="grid">
 <div><label>Quantity</label><input id="lqty" type="number" inputmode="decimal" step="any" value="1" oninput="calcDifference()"></div>
 <div><label>Unit Price</label><input id="lprice" type="number" inputmode="decimal" step="any" value="0" oninput="calcDifference()"></div>
@@ -152,7 +152,7 @@ details[open] summary:after{content:"−"}
 </div>
 <div class="compare-card">
 <h3>Right Side</h3>
-<div id="rightRates" class="rates" style="margin-bottom:14px"><small>Fetch an HS/PCT code to load editable rates.</small></div>
+<div id="rightRates" class="rates" style="margin-bottom:14px"><small>Fetch an HS/PCT code to load duty rates.</small></div>
 <div class="grid">
 <div><label>Quantity</label><input id="rqty" type="number" inputmode="decimal" step="any" value="1" oninput="calcDifference()"></div>
 <div><label>Unit Price</label><input id="rprice" type="number" inputmode="decimal" step="any" value="0" oninput="calcDifference()"></div>
@@ -189,8 +189,8 @@ async function fetchTariff(){
  const status=document.getElementById('status');
  const btn=document.getElementById('fetchBtn');
  if(!hs){status.textContent='Enter an HS/PCT code.';return}
- if(btn){btn.disabled=true;btn.classList.add('loading');btn.innerHTML='<span class="spinner"></span>Fetching TIPP Rates…';}
- status.textContent='Fetching current TIPP tariff…';
+ if(btn){btn.disabled=true;btn.classList.add('loading');btn.innerHTML='<span class="spinner"></span>Fetching Duty Rates…';}
+ status.textContent='Fetching current duty rates…';
  try{
    const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}).toString());
    const d=await readApiResponse(r);
@@ -226,7 +226,7 @@ async function fetchTariff(){
    status.textContent='';
    calc();
  }catch(e){status.textContent='Error: '+e.message}
- finally{if(btn){btn.disabled=false;btn.classList.remove('loading');btn.textContent='Fetch TIPP Rates';}}
+ finally{if(btn){btn.disabled=false;btn.classList.remove('loading');btn.textContent='Fetch Duty Rates';}}
 }
 function astFacts(){
  return {
@@ -379,7 +379,7 @@ function setFetchBusy(id,busy,text){
 async function fetchDifferenceLeftHS(){
  const hs=cleanHS(document.getElementById('diffLeftHs').value);
  const st=document.getElementById('diffLeftStatus'); if(!hs){st.textContent='Enter the left-side HS/PCT code.';return;}
- setFetchBusy('diffLeftFetch',true,'Fetch Left TIPP Rates'); st.textContent='Fetching current TIPP tariff…';
+ setFetchBusy('diffLeftFetch',true,'Fetch Left Duty Rates'); st.textContent='Fetching current duty rates…';
  try{
    const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}));
    const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
@@ -387,12 +387,12 @@ async function fetchDifferenceLeftHS(){
    diffLeftSpecial={pak_china_fta_cd:d.special_rates?.pak_china_fta_cd ?? null,income_tax_exemption_first_schedule_ii:d.special_rates?.income_tax_exemption_first_schedule_ii ?? null};
    diffLeftRates._tippCd=diffLeftRates.cd; diffLeftRates._tippIt=diffLeftRates.it; diffLeftHsCode=hs; renderDifferenceRates('l'); applyDifferenceOption('l','it');
    st.textContent='Loaded '+(d.code||hs)+' tariff rates for left side.'; calcDifference();
- }catch(e){st.textContent='Error: '+e.message;} finally{setFetchBusy('diffLeftFetch',false,'Fetch Left TIPP Rates');}
+ }catch(e){st.textContent='Error: '+e.message;} finally{setFetchBusy('diffLeftFetch',false,'Fetch Left Duty Rates');}
 }
 async function fetchDifferenceSameHS(){
  const hs=cleanHS(document.getElementById('diffSameHs').value);
  const st=document.getElementById('diffSameStatus'); if(!hs){st.textContent='Enter an HS/PCT code.';return;}
- setFetchBusy('diffSameFetch',true,'Fetch TIPP Rates'); st.textContent='Fetching current TIPP tariff…';
+ setFetchBusy('diffSameFetch',true,'Fetch Duty Rates'); st.textContent='Fetching current duty rates…';
  try{
    const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}));
    const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
@@ -402,12 +402,12 @@ async function fetchDifferenceSameHS(){
    diffRightSpecial={...diffLeftSpecial}; diffLeftRates._tippCd=diffLeftRates.cd; diffLeftRates._tippIt=diffLeftRates.it; diffRightRates._tippCd=diffRightRates.cd; diffRightRates._tippIt=diffRightRates.it; diffSameHsCode=hs;
    renderDifferenceRates('l'); renderDifferenceRates('r'); applyDifferenceOption('l','it'); applyDifferenceOption('r','it');
    st.textContent='Loaded '+(d.code||hs)+' tariff rates for both sides.'; calcDifference();
- }catch(e){st.textContent='Error: '+e.message;} finally{setFetchBusy('diffSameFetch',false,'Fetch TIPP Rates');}
+ }catch(e){st.textContent='Error: '+e.message;} finally{setFetchBusy('diffSameFetch',false,'Fetch Duty Rates');}
 }
 async function fetchDifferenceRightHS(){
  const hs=cleanHS(document.getElementById('diffRightHs').value);
  const st=document.getElementById('diffRightStatus'); if(!hs){st.textContent='Enter the right-side HS/PCT code.';return;}
- setFetchBusy('diffRightFetch',true,'Fetch Right TIPP Rates'); st.textContent='Fetching current TIPP tariff…';
+ setFetchBusy('diffRightFetch',true,'Fetch Right Duty Rates'); st.textContent='Fetching current duty rates…';
  try{
    const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}));
    const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
@@ -415,7 +415,7 @@ async function fetchDifferenceRightHS(){
    diffRightSpecial={pak_china_fta_cd:d.special_rates?.pak_china_fta_cd ?? null,income_tax_exemption_first_schedule_ii:d.special_rates?.income_tax_exemption_first_schedule_ii ?? null};
    diffRightRates._tippCd=diffRightRates.cd; diffRightRates._tippIt=diffRightRates.it; diffRightHsCode=hs; renderDifferenceRates('r'); applyDifferenceOption('r','it');
    st.textContent='Loaded '+(d.code||hs)+' tariff rates for right side.'; calcDifference();
- }catch(e){st.textContent='Error: '+e.message;} finally{setFetchBusy('diffRightFetch',false,'Fetch Right TIPP Rates');}
+ }catch(e){st.textContent='Error: '+e.message;} finally{setFetchBusy('diffRightFetch',false,'Fetch Right Duty Rates');}
 }
 function diffRateStore(prefix){ return prefix==='l'?diffLeftRates:diffRightRates; }
 function diffSpecialStore(prefix){ return prefix==='l'?diffLeftSpecial:diffRightSpecial; }
@@ -504,7 +504,7 @@ function calc(){
 
 <div id="nonCore" style="margin-top:16px;display:none">
 <details>
-<summary>Additional TIPP Information</summary>
+<summary>Additional Tariff Information</summary>
 <div class="tipp-extra">
 <div id="tippValidity" class="tipp-validity"></div>
 <div id="nonCoreBody"></div>
