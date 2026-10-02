@@ -166,144 +166,100 @@ def _parse_weboc_it_rates(html):
 
 
 def _find_weboc_tariff_url(session, headers):
-    """Find the current session-specific WeBOC Tariff & SROs URL.
+    """Get one fresh session-specific WeBOC Tariff & SROs URL.
 
-    WeBOC may use ASP.NET cookieless sessions, producing a URL such as
-    /Shared/TariffList.aspx or /(S(session-token))/Shared/TariffList.aspx.
-    The tokenized URL is important on some deployments.
+    WeBOC can use ASP.NET cookieless sessions. Do not make multiple discovery
+    requests here: tariff lookup must remain fast enough for Render/Gunicorn.
     """
-    candidates = [WEBOC_TARIFF_URL]
     try:
-        home = session.get("https://www.weboc.gov.pk/", timeout=15,
-                           verify=False, headers=headers, allow_redirects=True)
-        if home.ok:
-            final = home.url
-            if "TariffList.aspx" in final:
-                candidates.insert(0, final)
-            soup = BeautifulSoup(home.text, "html.parser")
-            for a in soup.find_all("a", href=True):
-                href = a.get("href", "")
-                if "TariffList.aspx" in href:
-                    candidates.insert(0, urljoin(final, href))
-    except requests.RequestException:
-        pass
-
-    # If the direct page redirects to a cookieless session URL, retain that.
-    try:
-        r = session.get(WEBOC_TARIFF_URL, timeout=15, verify=False,
+        r = session.get(WEBOC_TARIFF_URL, timeout=8, verify=False,
                         headers=headers, allow_redirects=True)
         if r.ok and "TariffList.aspx" in r.url:
-            candidates.insert(0, r.url)
+            yield r.url
+            return
     except requests.RequestException:
         pass
-
-    seen = set()
-    for u in candidates:
-        if u and u not in seen:
-            seen.add(u)
-            yield u
+    yield WEBOC_TARIFF_URL
 
 
 def _weboc_search_form(session, hs8):
-    """Submit WeBOC's public Tariff & SROs ASP.NET form."""
-    headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1"}
+    """Submit the public WeBOC ASP.NET Tariff & SROs form once."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1",
+        "Referer": "https://www.weboc.gov.pk/",
+    }
     for tariff_url in _find_weboc_tariff_url(session, headers):
         try:
-            r = session.get(tariff_url, timeout=15, verify=False, headers=headers,
+            r = session.get(tariff_url, timeout=8, verify=False, headers=headers,
                             allow_redirects=True)
-        except requests.RequestException:
-            continue
-        if not r.ok:
-            continue
-        soup = BeautifulSoup(r.text, "html.parser")
-        form = soup.find("form")
-        if not form:
-            continue
-
-        data = {}
-        for inp in form.find_all("input"):
-            name = inp.get("name")
-            if not name:
+            if not r.ok:
                 continue
-            typ = (inp.get("type") or "text").lower()
-            if typ in {"hidden", "text", "search", "number"}:
-                data[name] = inp.get("value", "")
+            soup = BeautifulSoup(r.text, "html.parser")
+            form = soup.find("form", id="form1") or soup.find("form")
+            if not form:
+                continue
 
-        text_candidates = []
-        for inp in form.find_all(["input", "textarea"]):
-            name = inp.get("name") or inp.get("id") or ""
-            ident = (name + " " + (inp.get("id") or "")).lower()
-            typ = (inp.get("type") or "text").lower()
-            if typ in {"text", "search", "number"} or inp.name == "textarea":
-                text_candidates.append((ident, name))
+            data = {}
+            for inp in form.find_all("input"):
+                name = inp.get("name")
+                if not name:
+                    continue
+                typ = (inp.get("type") or "text").lower()
+                if typ in {"hidden", "text", "search", "number"}:
+                    data[name] = inp.get("value", "")
 
-        hs_name = None
-        for ident, name in text_candidates:
-            if any(k in ident for k in ("hscode", "hs_code", "hs-code", "pct", "hs code")):
-                hs_name = name
-                break
-        if hs_name is None and text_candidates:
-            hs_name = text_candidates[0][1]
-        if not hs_name:
-            continue
-        data[hs_name] = hs8[:4] + "." + hs8[4:]
+            # This is the exact field/button pair found in the supplied
+            # WeBOC webarchive: TariffList$txtSearch / TariffList$btnSearch.
+            search_name = "TariffList$txtSearch"
+            search_button = "TariffList$btnSearch"
+            if search_name not in data:
+                # Fall back to discovering the actual text field.
+                for inp in form.find_all(["input", "textarea"]):
+                    ident = ((inp.get("name") or "") + " " + (inp.get("id") or "")).lower()
+                    if (inp.get("type") or "text").lower() in {"text", "search"} and any(k in ident for k in ("hscode", "pct", "hs_code", "search")):
+                        search_name = inp.get("name") or inp.get("id")
+                        break
+            data[search_name] = hs8[:4] + "." + hs8[4:]
+            data[search_button] = "Search"
 
-        for el in form.find_all(["input", "button"]):
-            name = el.get("name")
-            value = el.get("value", "")
-            ident = ((el.get("id") or "") + " " + value + " " + el.get_text(" ", strip=True)).lower()
-            if name and ("search" in ident or "btnsearch" in ident):
-                data[name] = value or "Search"
-                break
-
-        action = urljoin(tariff_url, form.get("action") or tariff_url)
-        try:
-            post = session.post(action, data=data, timeout=20, verify=False,
+            action = urljoin(tariff_url, form.get("action") or tariff_url)
+            post = session.post(action, data=data, timeout=12, verify=False,
                                 headers=headers, allow_redirects=True)
             if post.ok:
-                page_text = BeautifulSoup(post.text, "html.parser").get_text(" ", strip=True)
-                digits = re.sub(r"[^0-9]", "", page_text)
-                if hs8 in digits:
-                    return post.text
+                return post.text
         except requests.RequestException:
+            continue
+        except Exception:
             continue
     return None
 
+
 def weboc_income_tax_rates(session, hs8):
-    """Fetch Commercial and Industrial Income Tax rates from WeBOC."""
+    """Fetch Commercial and Industrial Income Tax rates from WeBOC.
+
+    The lookup is intentionally best-effort. Failure to reach WeBOC returns
+    null category rates rather than breaking the main TIPP JSON response.
+    """
     hs8 = re.sub(r"[^0-9]", "", str(hs8))[:8]
+    empty = {"commercial": None, "industrial": None,
+             "commercial_detail": None, "industrial_detail": None,
+             "source": WEBOC_TARIFF_URL, "error": None}
     if len(hs8) != 8:
-        return {"commercial": None, "industrial": None, "commercial_detail": None, "industrial_detail": None, "source": WEBOC_TARIFF_URL}
-
-    # Public Web Forms lookup. Try the form first; then a small set of GET
-    # variants used by older deployments of the same page.
-    html = _weboc_search_form(session, hs8)
-    headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1"}
-    if not html:
-        variants = [
-            {"HSCode": hs8},
-            {"HSCode": hs8[:4] + "." + hs8[4:]},
-            {"hsCode": hs8},
-            {"hs_code": hs8},
-            {"PCTCode": hs8},
-        ]
-        for params in variants:
-            try:
-                r = session.get(WEBOC_TARIFF_URL, params=params, timeout=12, verify=False, headers=headers)
-                if r.ok:
-                    digits = re.sub(r"[^0-9]", "", BeautifulSoup(r.text, "html.parser").get_text(" "))
-                    if hs8 in digits:
-                        html = r.text
-                        break
-            except requests.RequestException:
-                continue
-
-    if not html:
-        return {"commercial": None, "industrial": None, "commercial_detail": None, "industrial_detail": None, "source": WEBOC_TARIFF_URL, "error": "WeBOC tariff page could not be queried."}
-
-    result = _parse_weboc_it_rates(html)
-    result["source"] = WEBOC_TARIFF_URL
-    return result
+        empty["error"] = "Invalid HS code"
+        return empty
+    try:
+        html = _weboc_search_form(session, hs8)
+        if not html:
+            empty["error"] = "WeBOC tariff page could not be queried"
+            return empty
+        result = _parse_weboc_it_rates(html)
+        result["source"] = WEBOC_TARIFF_URL
+        if result.get("commercial") is None and result.get("industrial") is None:
+            result["error"] = "No commercial/industrial Income Tax rows found"
+        return result
+    except Exception as exc:
+        empty["error"] = str(exc)
+        return empty
 
 
 # Local CPFTA tariff-elimination schedule converted from the supplied

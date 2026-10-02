@@ -1,15 +1,12 @@
-Pakistan Customs Duty Calculator
+Pakistan Customs Duty Calculator — v46
 
-Deployment
-1. Upload all files/folders in this package to the GitHub repository root.
-2. Keep the data folder and cpfta_rates.csv in the same repository.
-3. Render build command: pip install -r requirements.txt
-4. Render start command: gunicorn --timeout 120 app:app
+This build keeps the existing TIPP/CPFTA/GST/AST/password features and adds a robust WeBOC Tariff & SROs Income Tax lookup.
 
-CPFTA
-The local data/cpfta_rates.csv file was converted from the supplied
-Tariff-Elimiantion-Schedule-of-Pakistan-final.xlsx. The app uses the
-calendar-year mapping Year 1 = 2020, so 2026 = Year 7. CPFTA rates are
-looked up by exact 8-digit PCT code; no PDF is downloaded or parsed.
+Income Tax:
+- Commercial Importer is the default and uses the Commercial Importer rate from WeBOC Exemptions/SROs when available.
+- Industrial concern is a checkbox and switches to the Industrial Undertaking rate from WeBOC.
+- The generic 12% tariff-line Income Tax remains only as fallback when WeBOC cannot be queried.
 
-Do not upload __pycache__.
+WeBOC access is best-effort and bounded by short timeouts so a WeBOC outage cannot turn /api/tariff into an HTML/500 response.
+
+Keep SITE_PASSWORD and FLASK_SECRET_KEY in Render environment variables. Do not put secrets in GitHub.
