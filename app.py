@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, session, redirect, url_for
 import re
 import os
 import datetime
@@ -11,10 +11,66 @@ import csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import threading
+import hmac
+import hashlib
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__, static_folder=".")
+
+# Simple site-wide password protection. The password and session secret are
+# supplied through Render environment variables rather than being embedded
+# in the frontend/source.
+SITE_PASSWORD = os.environ.get("SITE_PASSWORD", "").strip()
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or hashlib.sha256(
+    (SITE_PASSWORD or "customs-calculator-session").encode("utf-8")
+).hexdigest()
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = True
+
+LOGIN_PAGE = """<!doctype html>
+<html lang=\"en\">
+<head>
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
+<title>Customs Tariff Rates 2026–2027</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background:linear-gradient(135deg,#eef5ff,#f7f9fc);font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Arial,sans-serif;color:#10243a}.login{width:100%;max-width:430px;background:#fff;border-radius:24px;padding:30px 24px;box-shadow:0 18px 50px rgba(15,40,70,.14)}.brand{background:linear-gradient(135deg,#08233b,#1769d5);color:#fff;border-radius:18px;padding:24px;margin-bottom:22px}.brand h1{font-size:24px;margin:0 0 8px}.brand p{margin:0;opacity:.86}.lock{font-size:34px;margin-bottom:8px}label{display:block;font-weight:700;margin:0 0 8px}input{width:100%;height:54px;border:1px solid #d7dee8;border-radius:13px;padding:0 15px;font-size:18px;outline:none}input:focus{border-color:#1769d5;box-shadow:0 0 0 3px rgba(23,105,213,.12)}button{width:100%;height:54px;margin-top:14px;border:0;border-radius:13px;background:#1769d5;color:#fff;font-size:17px;font-weight:700}button:active{transform:scale(.99)}.error{margin-top:12px;color:#b42318;font-weight:600}.hint{margin-top:15px;color:#667085;font-size:13px;text-align:center}
+</style>
+</head>
+<body><main class=\"login\"><div class=\"brand\"><div class=\"lock\">🔒</div><h1>Customs Tariff Rates 2026–2027</h1><p>Enter the access password to continue.</p></div><form method=\"post\" action=\"/login\"><label for=\"password\">Password</label><input id=\"password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" autofocus required><button type=\"submit\">Access Calculator</button>{error}<div class=\"hint\">Authorized users only</div></form></main></body></html>"""
+
+@app.before_request
+def require_login():
+    # Health check and login/logout must remain reachable without a session.
+    if request.path in {"/health", "/login", "/logout"}:
+        return None
+    if request.path.startswith("/api/") or request.path == "/":
+        if session.get("authenticated") is True:
+            return None
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Authentication required"}), 401
+        return redirect(url_for("login"))
+    # There are no other public application assets; keep them protected too.
+    if session.get("authenticated") is not True:
+        return redirect(url_for("login"))
+    return None
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        supplied = request.form.get("password", "")
+        if SITE_PASSWORD and hmac.compare_digest(supplied, SITE_PASSWORD):
+            session.clear()
+            session["authenticated"] = True
+            return redirect(url_for("home"))
+        return LOGIN_PAGE.format(error='<div class=\"error\">Incorrect password.</div>'), 401
+    return LOGIN_PAGE.format(error="")
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 # Always return JSON for API failures. This prevents the browser from trying
 # to JSON.parse an HTML Flask/Render error page.
