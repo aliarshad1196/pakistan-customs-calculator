@@ -154,6 +154,7 @@ VERIFIED_RECORD_IDS = {
     "560811000000": "18692",
     "630910100000": "19208",
     "570329200000": "26949",
+    "551612000000": "18647",
 }
 
 
@@ -212,35 +213,123 @@ def page_has_code(html, tipp_code, prefix_code=None):
     return False
 
 
+def _href_record_id(value):
+    """Extract a TIPP commodity/detail record id from any HTML attribute."""
+    if not value:
+        return None
+    value = str(value)
+    # Decode common HTML/JS/URL escaping used by Yii grids and search engines.
+    from urllib.parse import unquote
+    for _ in range(3):
+        value = unquote(value).replace("&amp;", "&").replace("\\u003d", "=").replace("\\u0026", "&")
+    rid = numeric_id_from_href(value)
+    if rid:
+        return rid
+    # Some TIPP/Yii links put the id in JavaScript/on* attributes rather than href.
+    m = re.search(r'(?:[?&]|\\?&|\\b)id(?:=|%3D)(\\d+)', value, re.I)
+    return m.group(1) if m else None
+
+
 def record_id_from_html(html, requested_code):
-    soup = BeautifulSoup(html, "html.parser")
-    compact = re.sub(r"[^0-9]", "", requested_code)
+    """Robustly map a TIPP HS/PCT shown in search HTML to its record id.
 
-    # Prefer links that explicitly contain the requested code in the same row.
+    TIPP's grid has used several markup variants over time.  The old mapper
+    assumed the HS code and detail link were in one very specific row shape.
+    Instead we inspect the whole row, nearby table/container ancestors, all
+    link/JS/data attributes, and finally the raw HTML around every occurrence
+    of the requested code.
+    """
+    soup = BeautifulSoup(html or "", "html.parser")
+    compact = re.sub(r"[^0-9]", "", str(requested_code))
+    prefix = compact[:8] if len(compact) >= 8 else compact
+    candidates = []
+
+    def score_context(ctx):
+        digits = re.sub(r"[^0-9]", "", ctx or "")
+        score = 0
+        if compact and compact in digits:
+            score += 100
+        if prefix and prefix in digits:
+            score += 50
+        return score
+
+    def collect_links(node, base_score=0):
+        if not node:
+            return
+        for a in node.find_all(["a", "area", "button", "input"], href=True):
+            rid = _href_record_id(a.get("href"))
+            if rid:
+                candidates.append((base_score + 20, rid))
+        # Inspect all attributes because Yii grids can store the destination
+        # in data-url/data-href/data-id or an onclick handler.
+        for tag in node.find_all(True):
+            attrs = tag.attrs or {}
+            for name, value in attrs.items():
+                vals = value if isinstance(value, list) else [value]
+                for val in vals:
+                    rid = _href_record_id(val)
+                    if rid:
+                        candidates.append((base_score + 10, rid))
+                    elif isinstance(val, str):
+                        m = re.search(r'(?:id(?:=|%3D))(\d+)', val, re.I)
+                        if m:
+                            candidates.append((base_score + 8, m.group(1)))
+
+    # First: table rows. This is the most reliable association: the HS code
+    # and its File/detail link are normally cells in the same grid row.
     for row in soup.find_all("tr"):
-        row_text = re.sub(r"[^0-9]", "", row.get_text(" ", strip=True))
-        if compact not in row_text:
-            continue
-        for link in row.find_all("a", href=True):
-            record_id = numeric_id_from_href(link.get("href"))
-            if record_id:
-                return record_id
-        for attr in ("data-key", "data-id", "data-record-id", "data-product-id"):
-            value = row.get(attr)
-            if value and re.fullmatch(r"\d+", str(value).strip()):
-                return str(value).strip()
+        ctx = clean_text(row.get_text(" ", strip=True))
+        score = score_context(ctx)
+        if score:
+            collect_links(row, score)
+            rid = row.get("data-id") or row.get("data-key") or row.get("data-record-id") or row.get("data-product-id")
+            if rid and re.fullmatch(r"\d+", str(rid).strip()):
+                candidates.append((score + 30, str(rid).strip()))
 
-    # Then inspect any detail/view link whose nearby text contains the code.
-    for link in soup.find_all("a", href=True):
-        record_id = numeric_id_from_href(link.get("href"))
-        if not record_id:
-            continue
-        context = clean_text(link.parent.get_text(" ", strip=True)) if link.parent else ""
-        if compact in re.sub(r"[^0-9]", "", context):
-            return record_id
+    # Second: locate an element containing the code and walk up a few levels.
+    # This handles div/grid layouts where there is no useful <tr>.
+    for node in soup.find_all(string=re.compile(re.escape(compact))):
+        parent = node.parent
+        for level in range(5):
+            if not parent:
+                break
+            ctx = clean_text(parent.get_text(" ", strip=True))
+            score = score_context(ctx) - level * 3
+            if score > 0:
+                collect_links(parent, score)
+            parent = parent.parent
 
-    return None
+    # Third: raw HTML proximity. This catches links embedded in JSON or
+    # JavaScript generated by the grid. Search a generous window around the
+    # exact code and its 8-digit prefix.
+    raw = html or ""
+    needles = [n for n in (compact, prefix) if n]
+    for needle in needles:
+        for m in re.finditer(re.escape(needle), raw):
+            lo, hi = max(0, m.start()-2500), min(len(raw), m.end()+2500)
+            chunk = raw[lo:hi]
+            # Direct href/data-url/onClick occurrences.
+            for mm in re.finditer(r'(?:href|data-[\\w-]+|onclick)\\s*=\\s*["\\\']([^"\\\']+)["\\\']', chunk, re.I):
+                rid = _href_record_id(mm.group(1))
+                if rid:
+                    candidates.append((80 if needle == compact else 60, rid))
+            # Any TIPP detail URL encoded in JSON/script.
+            for mm in re.finditer(r'https?[^"\\\']*tipp\\.gov\\.pk[^"\\\']*', chunk, re.I):
+                rid = _href_record_id(mm.group(0))
+                if rid:
+                    candidates.append((70 if needle == compact else 55, rid))
+            # Plain id=123 close to the HS code.
+            for mm in re.finditer(r'(?:[?&]|%3F|%26)id(?:=|%3D)(\\d+)', chunk, re.I):
+                candidates.append((65 if needle == compact else 50, mm.group(1)))
 
+    # De-duplicate while retaining the strongest evidence for each ID.
+    best = {}
+    for score, rid in candidates:
+        if rid and (rid not in best or score > best[rid]):
+            best[rid] = score
+    if not best:
+        return None
+    return max(best.items(), key=lambda kv: (kv[1], -int(kv[0])))[0]
 
 def _extract_tipp_detail_ids_from_search_html(html, requested_code):
     """Extract candidate TIPP detail IDs from a search-engine result page.
