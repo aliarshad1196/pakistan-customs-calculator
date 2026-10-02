@@ -65,7 +65,7 @@ def login():
             session["authenticated"] = True
             return redirect(url_for("home"))
         return LOGIN_PAGE.format(error='<div class=\"error\">Incorrect password.</div>'), 401
-    return LOGIN_PAGE.format(error="")
+    return LOGIN_PAGE.replace('{error}', '')
 
 @app.route("/logout")
 def logout():
