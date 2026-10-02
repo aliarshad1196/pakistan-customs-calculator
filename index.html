@@ -196,7 +196,7 @@ async function fetchTariff(){
    const d=await readApiResponse(r);
    rates.cd=Number(d.rates.cd||0); rates.acd=Number(d.rates.acd||0);
    rates.rd=Number(d.rates.rd||0); rates.st=Number(d.rates.st||0);
-   rates.ast=Number(d.rates.ast||0); rates.it=Number(d.rates.it||0);
+   rates.ast=Number(d.rates.ast||0); rates.it=(d.rates.it===null?0:Number(d.rates.it||0));
    astSource=d.ast_source||astSource;
    Object.assign(tippRates,rates);
    specialRates.pak_china_fta_cd=d.special_rates?.pak_china_fta_cd ?? null;
@@ -225,7 +225,7 @@ async function fetchTariff(){
    document.getElementById('nonCoreBody').innerHTML=groups.join('<hr>');
    document.getElementById('nonCore').style.display='block';
    document.getElementById('tippValidity').textContent=d.validity||'';
-   status.textContent='';
+   status.textContent = specialRates.income_tax_commercial===null ? 'WeBOC Commercial Income Tax rate could not be retrieved for this PCT. No generic 12% rate has been substituted.' : '';
    calc();
  }catch(e){status.textContent='Error: '+e.message}
  finally{if(btn){btn.disabled=false;btn.classList.remove('loading');btn.textContent='Fetch Duty Rates';}}
@@ -282,7 +282,7 @@ function applyOptions(){
  } else if(specialRates.income_tax_commercial!==null){
    setRateInput('it',specialRates.income_tax_commercial);
  } else {
-   setRateInput('it',tippRates.it);
+   setRateInput('it',0);
  }
  calc();
 }
@@ -400,7 +400,7 @@ async function fetchDifferenceSameHS(){
  try{
    const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}));
    const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
-   rates.cd=Number(d.rates.cd||0); rates.acd=Number(d.rates.acd||0); rates.rd=Number(d.rates.rd||0); rates.st=Number(d.rates.st||0); rates.ast=Number(d.rates.ast||0); rates.it=Number(d.rates.it||0);
+   rates.cd=Number(d.rates.cd||0); rates.acd=Number(d.rates.acd||0); rates.rd=Number(d.rates.rd||0); rates.st=Number(d.rates.st||0); rates.ast=Number(d.rates.ast||0); rates.it=(d.rates.it===null?0:Number(d.rates.it||0));
    Object.assign(tippRates,rates); diffLeftRates={...rates}; diffRightRates={...rates};
    diffLeftSpecial={pak_china_fta_cd:d.special_rates?.pak_china_fta_cd ?? null,income_tax_exemption_first_schedule_ii:d.special_rates?.income_tax_exemption_first_schedule_ii ?? null,income_tax_commercial:d.special_rates?.income_tax_commercial ?? null,income_tax_industrial:d.special_rates?.income_tax_industrial ?? null};
    diffRightSpecial={...diffLeftSpecial}; diffLeftRates._tippCd=diffLeftRates.cd; diffLeftRates._tippIt=diffLeftRates.it; diffRightRates._tippCd=diffRightRates.cd; diffRightRates._tippIt=diffRightRates.it; diffSameHsCode=hs;
@@ -453,7 +453,7 @@ function applyDifferenceOption(prefix,key){
    const box=document.getElementById(prefix+'incomeTaxIndustrial');
    if(box?.checked && sp.income_tax_industrial!==null) rr.it=Number(sp.income_tax_industrial);
    else if(sp.income_tax_commercial!==null) rr.it=Number(sp.income_tax_commercial);
-   else rr.it=rr._tippIt ?? rr.it;
+   else rr.it=0;
    const el=document.getElementById(prefix+'rate_it'); if(el) el.value=(rr.it*100).toString();
  }
  calcDifference();

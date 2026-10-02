@@ -1,12 +1,12 @@
-Pakistan Customs Duty Calculator — v46
+Pakistan Customs Duty Calculator v48
 
-This build keeps the existing TIPP/CPFTA/GST/AST/password features and adds a robust WeBOC Tariff & SROs Income Tax lookup.
+Income Tax source:
+- Commercial Income Tax is fetched dynamically from the live WeBOC Tariff & SROs page for the entered HS/PCT code.
+- Industrial concern rate is fetched dynamically from the same WeBOC result.
+- The parser reads the actual "Exemptions / SROs" Income Tax rows containing "commercial importer" and "industrial undertaking".
+- No Commercial or Industrial Income Tax percentage is hard-coded.
+- If WeBOC cannot be queried or does not return a category rate, the calculator does NOT substitute TIPP's generic 12% rate. It reports that the WeBOC category rate is unavailable.
 
-Income Tax:
-- Commercial Importer is the default and uses the Commercial Importer rate from WeBOC Exemptions/SROs when available.
-- Industrial concern is a checkbox and switches to the Industrial Undertaking rate from WeBOC.
-- The generic 12% tariff-line Income Tax remains only as fallback when WeBOC cannot be queried.
+Other functionality from the previous build is retained, including password protection, TIPP tariff lookup, CPFTA, AST and GST.
 
-WeBOC access is best-effort and bounded by short timeouts so a WeBOC outage cannot turn /api/tariff into an HTML/500 response.
-
-Keep SITE_PASSWORD and FLASK_SECRET_KEY in Render environment variables. Do not put secrets in GitHub.
+Keep Render environment variables SITE_PASSWORD and FLASK_SECRET_KEY unchanged.
