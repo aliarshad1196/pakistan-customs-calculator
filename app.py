@@ -88,6 +88,172 @@ def api_500(error):
 
 TIPP_BASE = "https://www.tipp.gov.pk/index.php"
 
+WEBOC_TARIFF_URL = "https://www.weboc.gov.pk/Shared/TariffList.aspx"
+
+
+def _parse_weboc_it_rates(html):
+    """Extract commercial/industrial import-stage IT rates from WeBOC Tariff & SROs.
+
+    WeBOC shows a generic Income Tax rate in the main Tariff Information table
+    (often 12%), while the Exemptions / SROs section can contain the applicable
+    commercial-importer and industrial-undertaking rates.  We deliberately
+    extract only rows that identify those importer categories.
+    """
+    soup = BeautifulSoup(html or "", "html.parser")
+    out = {
+        "commercial": None,
+        "industrial": None,
+        "commercial_detail": None,
+        "industrial_detail": None,
+    }
+
+    # First inspect table rows, which is the normal WeBOC layout.
+    for tr in soup.find_all("tr"):
+        cells = [clean_text(c.get_text(" ", strip=True)) for c in tr.find_all(["th", "td"])]
+        if not cells:
+            continue
+        row = " | ".join(cells)
+        low = row.lower()
+        if "income tax" not in low:
+            continue
+
+        # Keep the category detection intentionally broad because WeBOC has
+        # used both "commercial importer" and "commercial" wording.
+        if "commercial importer" in low or ("commercial" in low and "import" in low):
+            rate = parse_rate(row)
+            if rate > 0:
+                out["commercial"] = rate
+                out["commercial_detail"] = row
+        if "industrial undertaking" in low or "industrial concern" in low:
+            rate = parse_rate(row)
+            if rate > 0:
+                out["industrial"] = rate
+                out["industrial_detail"] = row
+
+    # Fallback for markup where the text is not split into useful table rows.
+    if out["commercial"] is None or out["industrial"] is None:
+        text = clean_text(soup.get_text(" ", strip=True))
+        for m in re.finditer(r"income\s+tax.{0,500}", text, re.I):
+            chunk = text[m.start():m.end()]
+            low = chunk.lower()
+            rate = parse_rate(chunk)
+            if rate <= 0:
+                continue
+            if out["commercial"] is None and "commercial" in low and "import" in low:
+                out["commercial"] = rate
+                out["commercial_detail"] = chunk
+            if out["industrial"] is None and ("industrial undertaking" in low or "industrial concern" in low):
+                out["industrial"] = rate
+                out["industrial_detail"] = chunk
+
+    return out
+
+
+def _weboc_search_form(session, hs8):
+    """Submit WeBOC's public Tariff & SROs ASP.NET form.
+
+    The page is an older ASP.NET Web Forms page, so the exact control IDs can
+    vary. We discover the input/button names from the live page and preserve
+    hidden __VIEWSTATE/__EVENTVALIDATION fields before posting.
+    """
+    headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1"}
+    r = session.get(WEBOC_TARIFF_URL, timeout=12, verify=False, headers=headers)
+    if not r.ok:
+        return None
+    soup = BeautifulSoup(r.text, "html.parser")
+    form = soup.find("form")
+    if not form:
+        return None
+
+    data = {}
+    for inp in form.find_all("input"):
+        name = inp.get("name")
+        if not name:
+            continue
+        typ = (inp.get("type") or "text").lower()
+        if typ in {"hidden", "text"}:
+            data[name] = inp.get("value", "")
+
+    text_candidates = []
+    for inp in form.find_all(["input", "textarea"]):
+        name = inp.get("name") or inp.get("id") or ""
+        ident = (name + " " + (inp.get("id") or "")).lower()
+        typ = (inp.get("type") or "text").lower()
+        if typ in {"text", "search", "number"} or inp.name == "textarea":
+            text_candidates.append((ident, name))
+
+    # Prefer an HS/PCT-looking field. If the live page changes its control ID,
+    # fall back to the first ordinary text field.
+    hs_name = None
+    for ident, name in text_candidates:
+        if any(k in ident for k in ("hscode", "hscode", "hs_code", "hs-code", "pct", "hs code")):
+            hs_name = name
+            break
+    if hs_name is None and text_candidates:
+        hs_name = text_candidates[0][1]
+    if not hs_name:
+        return None
+    data[hs_name] = hs8[:4] + "." + hs8[4:]
+
+    # ASP.NET search buttons may be submit inputs or buttons. Include the
+    # discovered search control so server-side click handling fires.
+    for el in form.find_all(["input", "button"]):
+        name = el.get("name")
+        value = el.get("value", "")
+        ident = ((el.get("id") or "") + " " + value).lower()
+        if name and ("search" in ident or "btnsearch" in ident):
+            data[name] = value or "Search"
+            break
+
+    action = form.get("action") or WEBOC_TARIFF_URL
+    from urllib.parse import urljoin
+    action = urljoin(WEBOC_TARIFF_URL, action)
+    try:
+        post = session.post(action, data=data, timeout=15, verify=False, headers=headers)
+        if post.ok and hs8 in re.sub(r"[^0-9]", "", BeautifulSoup(post.text, "html.parser").get_text(" ")):
+            return post.text
+    except requests.RequestException:
+        pass
+    return None
+
+
+def weboc_income_tax_rates(session, hs8):
+    """Fetch Commercial and Industrial Income Tax rates from WeBOC."""
+    hs8 = re.sub(r"[^0-9]", "", str(hs8))[:8]
+    if len(hs8) != 8:
+        return {"commercial": None, "industrial": None, "commercial_detail": None, "industrial_detail": None, "source": WEBOC_TARIFF_URL}
+
+    # Public Web Forms lookup. Try the form first; then a small set of GET
+    # variants used by older deployments of the same page.
+    html = _weboc_search_form(session, hs8)
+    headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1"}
+    if not html:
+        variants = [
+            {"HSCode": hs8},
+            {"HSCode": hs8[:4] + "." + hs8[4:]},
+            {"hsCode": hs8},
+            {"hs_code": hs8},
+            {"PCTCode": hs8},
+        ]
+        for params in variants:
+            try:
+                r = session.get(WEBOC_TARIFF_URL, params=params, timeout=12, verify=False, headers=headers)
+                if r.ok:
+                    digits = re.sub(r"[^0-9]", "", BeautifulSoup(r.text, "html.parser").get_text(" "))
+                    if hs8 in digits:
+                        html = r.text
+                        break
+            except requests.RequestException:
+                continue
+
+    if not html:
+        return {"commercial": None, "industrial": None, "commercial_detail": None, "industrial_detail": None, "source": WEBOC_TARIFF_URL, "error": "WeBOC tariff page could not be queried."}
+
+    result = _parse_weboc_it_rates(html)
+    result["source"] = WEBOC_TARIFF_URL
+    return result
+
+
 # Local CPFTA tariff-elimination schedule converted from the supplied
 # Pakistan-China FTA Excel schedule. Keeping the schedule local avoids
 # downloading/parsing a large PDF on Render for every tariff lookup.
@@ -726,8 +892,8 @@ def parse_tariff_page(html):
 
     rates = {"cd": 0.0, "acd": 0.0, "rd": 0.0, "st": 0.0, "ast": 0.0, "it": 0.0}
     non_core = {"concessions": [], "exemptions": [], "provincial_cess": []}
-    special_rates = {"pak_china_fta_cd": None, "income_tax_exemption_first_schedule_ii": None}
-    special_details = {"pak_china_fta_cd": None, "income_tax_exemption_first_schedule_ii": None}
+    special_rates = {"pak_china_fta_cd": None, "income_tax_exemption_first_schedule_ii": None, "income_tax_commercial": None, "income_tax_industrial": None}
+    special_details = {"pak_china_fta_cd": None, "income_tax_exemption_first_schedule_ii": None, "income_tax_commercial": None, "income_tax_industrial": None}
     validity = []
 
     tables = soup.find_all("table")
@@ -952,6 +1118,22 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
         # The local schedule is the source of truth for the FTA checkbox.
         special_rates["pak_china_fta_cd"] = None
         special_details["pak_china_fta_cd"] = f"CPFTA local schedule lookup warning: {cpfta_error}"
+    # WeBOC Tariff & SROs is the source for the importer-category income-tax
+    # rates. The main WeBOC tariff table may show 12%, but the SRO section
+    # separately identifies the commercial and industrial rates.
+    try:
+        weboc_it = weboc_income_tax_rates(session, hs8)
+        if weboc_it.get("commercial") is not None:
+            special_rates["income_tax_commercial"] = weboc_it["commercial"]
+            special_details["income_tax_commercial"] = weboc_it.get("commercial_detail")
+            # Commercial is the calculator default.
+            rates["it"] = weboc_it["commercial"]
+        if weboc_it.get("industrial") is not None:
+            special_rates["income_tax_industrial"] = weboc_it["industrial"]
+            special_details["income_tax_industrial"] = weboc_it.get("industrial_detail")
+    except Exception as weboc_error:
+        special_details["income_tax_commercial"] = f"WeBOC lookup warning: {weboc_error}"
+
     # TIPP often does not expose the import-stage minimum value-addition tax
     # (shown by WeBOC as Additional Sales Tax / AST). The Twelfth Schedule to
     # the Sales Tax Act, 1990 provides a 3% ad-valorem rate, subject to its
@@ -960,7 +1142,10 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
     ast_rate = ast_rule["rate"]
     rates["ast"] = ast_rate
     it_rule = apply_atl_adjustment(income_tax_rule(hs8, importer_type=importer_type, schedule_part=schedule_part, atl=atl, facts=facts), atl=atl)
-    if it_rule.get("rate") is not None:
+    # Do not overwrite the live WeBOC commercial rate with the generic TIPP or
+    # internal rule-layer rate. If WeBOC supplied no category rate, retain the
+    # tariff-page rate as a fallback and expose the rule metadata separately.
+    if special_rates.get("income_tax_commercial") is None and it_rule.get("rate") is not None:
         rates["it"] = it_rule["rate"]
     description = extract_commodity_info(soup, tipp_code)
 
