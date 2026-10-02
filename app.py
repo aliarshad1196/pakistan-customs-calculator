@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify, send_from_directory, session, redirec
 import re
 import os
 import datetime
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urljoin
 from pathlib import Path
 import requests
 import urllib3
@@ -91,23 +91,39 @@ TIPP_BASE = "https://www.tipp.gov.pk/index.php"
 WEBOC_TARIFF_URL = "https://www.weboc.gov.pk/Shared/TariffList.aspx"
 
 
-def _parse_weboc_it_rates(html):
-    """Extract commercial/industrial import-stage IT rates from WeBOC Tariff & SROs.
+def _extract_category_rate(text, category):
+    """Extract the percentage associated with a specific WeBOC IT category.
 
-    WeBOC shows a generic Income Tax rate in the main Tariff Information table
-    (often 12%), while the Exemptions / SROs section can contain the applicable
-    commercial-importer and industrial-undertaking rates.  We deliberately
-    extract only rows that identify those importer categories.
+    WeBOC rows can contain several numbers (schedule/part/serial references)
+    before the actual rate.  Do not use the first percentage in the row.
     """
-    soup = BeautifulSoup(html or "", "html.parser")
-    out = {
-        "commercial": None,
-        "industrial": None,
-        "commercial_detail": None,
-        "industrial_detail": None,
-    }
+    t = clean_text(text)
+    low = t.lower()
+    if category == "commercial":
+        patterns = [
+            r"commercial\s+importer.{0,500}?@?\s*(\d+(?:\.\d+)?)\s*%",
+            r"commercial.{0,500}?import.{0,300}?@?\s*(\d+(?:\.\d+)?)\s*%",
+        ]
+    else:
+        patterns = [
+            r"industrial\s+undertaking.{0,500}?@?\s*(\d+(?:\.\d+)?)\s*%",
+            r"industrial\s+concern.{0,500}?@?\s*(\d+(?:\.\d+)?)\s*%",
+        ]
+    for pat in patterns:
+        m = re.search(pat, t, re.I)
+        if m:
+            return float(m.group(1)) / 100
+    return None
 
-    # First inspect table rows, which is the normal WeBOC layout.
+
+def _parse_weboc_it_rates(html):
+    """Extract commercial/industrial import-stage IT rates from WeBOC Tariff & SROs."""
+    soup = BeautifulSoup(html or "", "html.parser")
+    out = {"commercial": None, "industrial": None,
+           "commercial_detail": None, "industrial_detail": None}
+
+    # The normal page has the two relevant rates in separate Exemptions / SROs
+    # table rows. Inspect every row containing Income Tax and a category phrase.
     for tr in soup.find_all("tr"):
         cells = [clean_text(c.get_text(" ", strip=True)) for c in tr.find_all(["th", "td"])]
         if not cells:
@@ -116,106 +132,142 @@ def _parse_weboc_it_rates(html):
         low = row.lower()
         if "income tax" not in low:
             continue
-
-        # Keep the category detection intentionally broad because WeBOC has
-        # used both "commercial importer" and "commercial" wording.
         if "commercial importer" in low or ("commercial" in low and "import" in low):
-            rate = parse_rate(row)
-            if rate > 0:
+            rate = _extract_category_rate(row, "commercial")
+            if rate is not None:
                 out["commercial"] = rate
                 out["commercial_detail"] = row
         if "industrial undertaking" in low or "industrial concern" in low:
-            rate = parse_rate(row)
-            if rate > 0:
+            rate = _extract_category_rate(row, "industrial")
+            if rate is not None:
                 out["industrial"] = rate
                 out["industrial_detail"] = row
 
-    # Fallback for markup where the text is not split into useful table rows.
-    if out["commercial"] is None or out["industrial"] is None:
-        text = clean_text(soup.get_text(" ", strip=True))
-        for m in re.finditer(r"income\s+tax.{0,500}", text, re.I):
-            chunk = text[m.start():m.end()]
-            low = chunk.lower()
-            rate = parse_rate(chunk)
-            if rate <= 0:
-                continue
-            if out["commercial"] is None and "commercial" in low and "import" in low:
-                out["commercial"] = rate
-                out["commercial_detail"] = chunk
-            if out["industrial"] is None and ("industrial undertaking" in low or "industrial concern" in low):
-                out["industrial"] = rate
-                out["industrial_detail"] = chunk
+    # Some versions render the SRO section as divs/plain text rather than
+    # useful table rows. Split around Income Tax entries and inspect each
+    # category-specific block separately.
+    text = clean_text(soup.get_text(" ", strip=True))
+    for phrase, category in [
+        ("commercial importer", "commercial"),
+        ("industrial undertaking", "industrial"),
+        ("industrial concern", "industrial"),
+    ]:
+        if (category == "commercial" and out["commercial"] is not None) or (category == "industrial" and out["industrial"] is not None):
+            continue
+        pos = text.lower().find(phrase)
+        if pos >= 0:
+            chunk = text[max(0, pos-80):pos+700]
+            rate = _extract_category_rate(chunk, category)
+            if rate is not None:
+                out[category] = rate
+                out[category + "_detail"] = chunk
 
     return out
 
 
-def _weboc_search_form(session, hs8):
-    """Submit WeBOC's public Tariff & SROs ASP.NET form.
+def _find_weboc_tariff_url(session, headers):
+    """Find the current session-specific WeBOC Tariff & SROs URL.
 
-    The page is an older ASP.NET Web Forms page, so the exact control IDs can
-    vary. We discover the input/button names from the live page and preserve
-    hidden __VIEWSTATE/__EVENTVALIDATION fields before posting.
+    WeBOC may use ASP.NET cookieless sessions, producing a URL such as
+    /Shared/TariffList.aspx or /(S(session-token))/Shared/TariffList.aspx.
+    The tokenized URL is important on some deployments.
     """
-    headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1"}
-    r = session.get(WEBOC_TARIFF_URL, timeout=12, verify=False, headers=headers)
-    if not r.ok:
-        return None
-    soup = BeautifulSoup(r.text, "html.parser")
-    form = soup.find("form")
-    if not form:
-        return None
-
-    data = {}
-    for inp in form.find_all("input"):
-        name = inp.get("name")
-        if not name:
-            continue
-        typ = (inp.get("type") or "text").lower()
-        if typ in {"hidden", "text"}:
-            data[name] = inp.get("value", "")
-
-    text_candidates = []
-    for inp in form.find_all(["input", "textarea"]):
-        name = inp.get("name") or inp.get("id") or ""
-        ident = (name + " " + (inp.get("id") or "")).lower()
-        typ = (inp.get("type") or "text").lower()
-        if typ in {"text", "search", "number"} or inp.name == "textarea":
-            text_candidates.append((ident, name))
-
-    # Prefer an HS/PCT-looking field. If the live page changes its control ID,
-    # fall back to the first ordinary text field.
-    hs_name = None
-    for ident, name in text_candidates:
-        if any(k in ident for k in ("hscode", "hscode", "hs_code", "hs-code", "pct", "hs code")):
-            hs_name = name
-            break
-    if hs_name is None and text_candidates:
-        hs_name = text_candidates[0][1]
-    if not hs_name:
-        return None
-    data[hs_name] = hs8[:4] + "." + hs8[4:]
-
-    # ASP.NET search buttons may be submit inputs or buttons. Include the
-    # discovered search control so server-side click handling fires.
-    for el in form.find_all(["input", "button"]):
-        name = el.get("name")
-        value = el.get("value", "")
-        ident = ((el.get("id") or "") + " " + value).lower()
-        if name and ("search" in ident or "btnsearch" in ident):
-            data[name] = value or "Search"
-            break
-
-    action = form.get("action") or WEBOC_TARIFF_URL
-    from urllib.parse import urljoin
-    action = urljoin(WEBOC_TARIFF_URL, action)
+    candidates = [WEBOC_TARIFF_URL]
     try:
-        post = session.post(action, data=data, timeout=15, verify=False, headers=headers)
-        if post.ok and hs8 in re.sub(r"[^0-9]", "", BeautifulSoup(post.text, "html.parser").get_text(" ")):
-            return post.text
+        home = session.get("https://www.weboc.gov.pk/", timeout=15,
+                           verify=False, headers=headers, allow_redirects=True)
+        if home.ok:
+            final = home.url
+            if "TariffList.aspx" in final:
+                candidates.insert(0, final)
+            soup = BeautifulSoup(home.text, "html.parser")
+            for a in soup.find_all("a", href=True):
+                href = a.get("href", "")
+                if "TariffList.aspx" in href:
+                    candidates.insert(0, urljoin(final, href))
     except requests.RequestException:
         pass
-    return None
 
+    # If the direct page redirects to a cookieless session URL, retain that.
+    try:
+        r = session.get(WEBOC_TARIFF_URL, timeout=15, verify=False,
+                        headers=headers, allow_redirects=True)
+        if r.ok and "TariffList.aspx" in r.url:
+            candidates.insert(0, r.url)
+    except requests.RequestException:
+        pass
+
+    seen = set()
+    for u in candidates:
+        if u and u not in seen:
+            seen.add(u)
+            yield u
+
+
+def _weboc_search_form(session, hs8):
+    """Submit WeBOC's public Tariff & SROs ASP.NET form."""
+    headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1"}
+    for tariff_url in _find_weboc_tariff_url(session, headers):
+        try:
+            r = session.get(tariff_url, timeout=15, verify=False, headers=headers,
+                            allow_redirects=True)
+        except requests.RequestException:
+            continue
+        if not r.ok:
+            continue
+        soup = BeautifulSoup(r.text, "html.parser")
+        form = soup.find("form")
+        if not form:
+            continue
+
+        data = {}
+        for inp in form.find_all("input"):
+            name = inp.get("name")
+            if not name:
+                continue
+            typ = (inp.get("type") or "text").lower()
+            if typ in {"hidden", "text", "search", "number"}:
+                data[name] = inp.get("value", "")
+
+        text_candidates = []
+        for inp in form.find_all(["input", "textarea"]):
+            name = inp.get("name") or inp.get("id") or ""
+            ident = (name + " " + (inp.get("id") or "")).lower()
+            typ = (inp.get("type") or "text").lower()
+            if typ in {"text", "search", "number"} or inp.name == "textarea":
+                text_candidates.append((ident, name))
+
+        hs_name = None
+        for ident, name in text_candidates:
+            if any(k in ident for k in ("hscode", "hs_code", "hs-code", "pct", "hs code")):
+                hs_name = name
+                break
+        if hs_name is None and text_candidates:
+            hs_name = text_candidates[0][1]
+        if not hs_name:
+            continue
+        data[hs_name] = hs8[:4] + "." + hs8[4:]
+
+        for el in form.find_all(["input", "button"]):
+            name = el.get("name")
+            value = el.get("value", "")
+            ident = ((el.get("id") or "") + " " + value + " " + el.get_text(" ", strip=True)).lower()
+            if name and ("search" in ident or "btnsearch" in ident):
+                data[name] = value or "Search"
+                break
+
+        action = urljoin(tariff_url, form.get("action") or tariff_url)
+        try:
+            post = session.post(action, data=data, timeout=20, verify=False,
+                                headers=headers, allow_redirects=True)
+            if post.ok:
+                page_text = BeautifulSoup(post.text, "html.parser").get_text(" ", strip=True)
+                digits = re.sub(r"[^0-9]", "", page_text)
+                if hs8 in digits:
+                    return post.text
+        except requests.RequestException:
+            continue
+    return None
 
 def weboc_income_tax_rates(session, hs8):
     """Fetch Commercial and Industrial Income Tax rates from WeBOC."""
