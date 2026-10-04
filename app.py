@@ -174,6 +174,7 @@ def _get_weboc_form(session, headers):
     than making a second GET that can create a different session.
     """
     try:
+        diag(stage="GET", requested_url=WEBOC_TARIFF_URL)
         r = session.get(
             WEBOC_TARIFF_URL,
             timeout=(5, 12),
@@ -192,7 +193,7 @@ def _get_weboc_form(session, headers):
         return None, None, str(exc)
 
 
-def _weboc_search_once(hs8):
+def _weboc_search_once(hs8, diagnostics=None):
     """Perform one completely fresh WeBOC Tariff & SROs search.
 
     WeBOC uses ASP.NET ViewState and can issue a session-specific URL.  A
@@ -213,6 +214,9 @@ def _weboc_search_once(hs8):
     }
     session = requests.Session()
     session.headers.update(headers)
+    def diag(**kwargs):
+        if diagnostics is not None:
+            diagnostics.update(kwargs)
     try:
         r = session.get(
             WEBOC_TARIFF_URL,
@@ -220,15 +224,19 @@ def _weboc_search_once(hs8):
             verify=False,
             allow_redirects=True,
         )
+        diag(get_status=r.status_code, get_url=r.url, get_content_length=len(r.text or ""))
         if not r.ok:
+            diag(error_stage="GET")
             return None, f"WeBOC GET returned HTTP {r.status_code} ({r.url})"
 
         soup = BeautifulSoup(r.text, "html.parser")
         form = soup.find("form", id="form1") or soup.find("form")
         if not form:
+            diag(form_found=False, error_stage="FORM")
             title = clean_text(soup.title.get_text(" ", strip=True)) if soup.title else ""
             return None, f"WeBOC tariff form was not found (final URL: {r.url}; title: {title[:120]})"
 
+        diag(form_found=True, form_action=form.get("action") or r.url, input_count=len(form.find_all("input")))
         data = {}
         for inp in form.find_all("input"):
             name = inp.get("name")
@@ -249,14 +257,17 @@ def _weboc_search_once(hs8):
             if candidates:
                 search_name = candidates[0]
         if search_name not in data:
+            diag(error_stage="SEARCH_FIELD", search_field=None)
             return None, "WeBOC HS search field was not found"
 
         data[search_name] = hs8[:4] + "." + hs8[4:]
+        diag(search_field=search_name, search_value=data[search_name])
         button = form.find("input", attrs={"name": "TariffList$btnSearch"})
         if button:
             data["TariffList$btnSearch"] = button.get("value", "Search")
 
         action = urljoin(r.url, form.get("action") or r.url)
+        diag(stage="POST", post_url=action, hidden_fields=len(data))
         post = session.post(
             action,
             data=data,
@@ -265,19 +276,31 @@ def _weboc_search_once(hs8):
             headers={**headers, "Referer": r.url},
             allow_redirects=True,
         )
+        diag(post_status=post.status_code, post_url=post.url, post_content_length=len(post.text or ""))
         if not post.ok:
+            diag(error_stage="POST")
             return None, f"WeBOC POST returned HTTP {post.status_code} ({post.url})"
 
         # Do not require one particular label before parsing.  WeBOC has
         # changed whitespace/markup around these labels, while the actual
         # Income Tax rows are what matter.
         page_text = clean_text(BeautifulSoup(post.text, "html.parser").get_text(" ", strip=True))
+        diag(
+            final_page_chars=len(page_text),
+            has_income_tax="income tax" in page_text.lower(),
+            has_commercial_importer="commercial importer" in page_text.lower(),
+            has_industrial_undertaking="industrial undertaking" in page_text.lower(),
+            has_exemptions_sros="exemptions / sros" in page_text.lower(),
+        )
         if len(page_text) < 100:
+            diag(error_stage="RESULT_PAGE")
             return None, f"WeBOC returned an unexpectedly short page ({len(page_text)} chars; {post.url})"
         return post.text, None
     except requests.RequestException as exc:
+        diag(error_stage="REQUEST_EXCEPTION")
         return None, f"WeBOC connection error: {exc}"
     except Exception as exc:
+        diag(error_stage="EXCEPTION")
         return None, f"WeBOC parser/request error: {exc}"
 
 
@@ -1287,6 +1310,25 @@ def income_tax_only():
 @app.route("/health")
 def health():
     return jsonify({"ok": True})
+
+
+@app.route("/api/weboc-debug")
+def weboc_debug():
+    """Diagnostic-only live WeBOC session test. No rates are hard-coded."""
+    raw_hs = request.args.get("hs", "9503.0090")
+    hs8 = re.sub(r"[^0-9]", "", raw_hs)[:8]
+    if len(hs8) != 8:
+        return jsonify({"ok": False, "error": "Enter an 8-digit PCT, e.g. 9503.0090"}), 400
+    diagnostics = {"hs8": hs8, "requested_hs": raw_hs}
+    html, error = _weboc_search_once(hs8, diagnostics=diagnostics)
+    diagnostics["ok"] = bool(html)
+    diagnostics["error"] = error
+    if html:
+        parsed = _parse_weboc_it_rates(html)
+        diagnostics["parsed_income_tax"] = parsed
+    else:
+        diagnostics["parsed_income_tax"] = {"commercial": None, "industrial": None}
+    return jsonify(diagnostics)
 
 
 @app.route("/api/tariff")
