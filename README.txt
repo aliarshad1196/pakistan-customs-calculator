@@ -1,3 +1,4 @@
-Cloudflare Worker update for Pakistan Customs Calculator v56.
-Replace the Worker code with worker.js and Deploy.
-Render variable remains WEBOC_PROXY_URL=https://webo-proxy.aliarshad1196.workers.dev
+v59: strict live WeBOC Income Tax integration.
+Uses WEBOC_PROXY_URL when set, otherwise the deployed Cloudflare Worker URL.
+No generic/statutory Income Tax fallback is used for calculator IT.
+New diagnostic endpoint: /api/weboc-debug?hs=9503.0090
