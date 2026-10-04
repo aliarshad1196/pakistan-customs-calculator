@@ -56,18 +56,74 @@ function textOnly(html) {
     .replace(/&nbsp;/gi, " ").replace(/&amp;/gi,"&").replace(/&quot;/gi,'"')
     .replace(/\s+/g, " ").trim();
 }
-function rateAfter(text, label) {
-  const i = text.toLowerCase().indexOf(label.toLowerCase());
-  if (i < 0) return null;
-  const s = text.slice(i, i + 700);
-  const m = s.match(/@\s*(\d+(?:\.\d+)?)\s*%/i) || s.match(/(\d+(?:\.\d+)?)\s*%/i);
+function extractPercent(s) {
+  const m = s.match(/@\s*(\d+(?:\.\d+)?)\s*%/i) || s.match(/(?:^|\s)(\d+(?:\.\d+)?)\s*%/i);
   return m ? Number(m[1]) / 100 : null;
 }
 function parseRates(html) {
+  // WeBOC renders the tariff as an HTML table. The ordinary tariff row can
+  // contain "Income Tax @ 12%", so searching for the first Income Tax rate is
+  // wrong. We must identify the specific First Schedule rows for Commercial
+  // Importer and Industrial Undertaking.
+  let commercial = null;
+  let industrial = null;
+  const matchedRows = [];
+
+  const rowRe = /<tr\b[^>]*>[\s\S]*?<\/tr>/gi;
+  let m;
+  while ((m = rowRe.exec(html)) !== null) {
+    const rowHtml = m[0];
+    const rowText = textOnly(rowHtml);
+    const lower = rowText.toLowerCase();
+    if (!lower.includes("income tax")) continue;
+
+    const rate = extractPercent(rowText);
+    if (rate === null) continue;
+
+    // Match the actual First Schedule classification, not generic tariff
+    // "Income Tax @ 12%" rows.
+    if (/commercial\s*importer/i.test(rowText) && /part[-\s]*ii/i.test(rowText)) {
+      commercial = rate;
+      matchedRows.push({type:"commercial", text:rowText.slice(0,500), rate});
+    }
+    if (/industrial\s*undertaking/i.test(rowText) && /part[-\s]*ii/i.test(rowText)) {
+      industrial = rate;
+      matchedRows.push({type:"industrial", text:rowText.slice(0,500), rate});
+    }
+  }
+
+  // Fallback for layouts where the row markup is not a normal <tr>. Search
+  // specifically around the First Schedule wording and never use the generic
+  // Income Tax tariff row.
   const t = textOnly(html);
-  const commercial = rateAfter(t, "Commercial Importer");
-  const industrial = rateAfter(t, "Industrial Undertaking");
-  return { commercial, industrial, text_preview: t.slice(Math.max(0, t.toLowerCase().indexOf("income tax") - 150), t.toLowerCase().indexOf("income tax") + 1600) };
+  const incomePositions = [];
+  const re = /income tax/ig;
+  let x;
+  while ((x = re.exec(t)) !== null) incomePositions.push(x.index);
+
+  for (const pos of incomePositions) {
+    const chunk = t.slice(pos, pos + 900);
+    const lower = chunk.toLowerCase();
+    if (!lower.includes("first schedule") && !lower.includes("twelfth schedule") && !lower.includes("commercial importer") && !lower.includes("industrial undertaking")) continue;
+    const rate = extractPercent(chunk);
+    if (rate === null) continue;
+    if (commercial === null && /commercial\s*importer/i.test(chunk) && /part[-\s]*ii/i.test(chunk)) {
+      commercial = rate;
+      matchedRows.push({type:"commercial-fallback", text:chunk.slice(0,500), rate});
+    }
+    if (industrial === null && /industrial\s*undertaking/i.test(chunk) && /part[-\s]*ii/i.test(chunk)) {
+      industrial = rate;
+      matchedRows.push({type:"industrial-fallback", text:chunk.slice(0,500), rate});
+    }
+  }
+
+  const incomeIndex = t.toLowerCase().indexOf("income tax");
+  return {
+    commercial,
+    industrial,
+    matched_rows: matchedRows,
+    text_preview: incomeIndex >= 0 ? t.slice(incomeIndex, incomeIndex + 2200) : t.slice(0,2200)
+  };
 }
 async function get(url, jar, referer) {
   const headers = {"User-Agent": UA, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Accept-Language":"en-US,en;q=0.9"};

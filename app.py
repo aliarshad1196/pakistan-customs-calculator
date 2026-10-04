@@ -1,649 +1,27 @@
-from flask import Flask, request, jsonify, send_from_directory, session, redirect, url_for
+from flask import Flask, request, jsonify, send_from_directory
 import re
 import os
 import datetime
-from urllib.parse import quote_plus, urljoin
-from pathlib import Path
+from urllib.parse import quote_plus
 import requests
-import socket
-import urllib3.util.connection as urllib3_connection
-
-# Render environments can prefer an unreachable IPv6 route for WeBOC. Force
-# outbound HTTPS resolution to IPv4 so the request fails/works on the reachable
-# address instead of hanging until Gunicorn kills the worker.
-urllib3_connection.allowed_gai_family = lambda: socket.AF_INET
 import urllib3
 from bs4 import BeautifulSoup
-
-WEBOC_PROXY_URL = os.getenv("WEBOC_PROXY_URL", "").strip().rstrip("/")
-
-class WebocProxySession(requests.Session):
-    """requests.Session that optionally tunnels PSW/WeBOC traffic through a proxy.
-
-    Set WEBOC_PROXY_URL to a proxy endpoint such as:
-    https://your-worker.example.workers.dev/proxy
-    The proxy must accept X-Target-URL and forward method, headers, body, cookies.
-    """
-    def request(self, method, url, **kwargs):
-        if WEBOC_PROXY_URL and (
-            "weboc.gov.pk" in url.lower() or "psw.gov.pk" in url.lower()
-        ):
-            headers = dict(kwargs.pop("headers", {}) or {})
-            headers["X-Target-URL"] = url
-            url = WEBOC_PROXY_URL
-            kwargs["headers"] = headers
-        return super().request(method, url, **kwargs)
-
-import csv
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import json
-import threading
-import hmac
-import hashlib
+from pypdf import PdfReader
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__, static_folder=".")
 
-# Simple site-wide password protection. The password and session secret are
-# supplied through Render environment variables rather than being embedded
-# in the frontend/source.
-SITE_PASSWORD = os.environ.get("SITE_PASSWORD", "").strip()
-app.secret_key = os.environ.get("FLASK_SECRET_KEY") or hashlib.sha256(
-    (SITE_PASSWORD or "customs-calculator-session").encode("utf-8")
-).hexdigest()
-app.config["SESSION_COOKIE_HTTPONLY"] = True
-app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["SESSION_COOKIE_SECURE"] = True
-
-LOGIN_PAGE = """<!doctype html>
-<html lang=\"en\">
-<head>
-<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
-<title>Customs Tariff Rates 2026–2027</title>
-<style>
-*{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background:linear-gradient(135deg,#eef5ff,#f7f9fc);font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Arial,sans-serif;color:#10243a}.login{width:100%;max-width:430px;background:#fff;border-radius:24px;padding:30px 24px;box-shadow:0 18px 50px rgba(15,40,70,.14)}.brand{background:linear-gradient(135deg,#08233b,#1769d5);color:#fff;border-radius:18px;padding:24px;margin-bottom:22px}.brand h1{font-size:24px;margin:0 0 8px}.brand p{margin:0;opacity:.86}.lock{font-size:34px;margin-bottom:8px}label{display:block;font-weight:700;margin:0 0 8px}input{width:100%;height:54px;border:1px solid #d7dee8;border-radius:13px;padding:0 15px;font-size:18px;outline:none}input:focus{border-color:#1769d5;box-shadow:0 0 0 3px rgba(23,105,213,.12)}button{width:100%;height:54px;margin-top:14px;border:0;border-radius:13px;background:#1769d5;color:#fff;font-size:17px;font-weight:700}button:active{transform:scale(.99)}.error{margin-top:12px;color:#b42318;font-weight:600}.hint{margin-top:15px;color:#667085;font-size:13px;text-align:center}
-</style>
-</head>
-<body><main class=\"login\"><div class=\"brand\"><div class=\"lock\">🔒</div><h1>Customs Tariff Rates 2026–2027</h1><p>Enter the access password to continue.</p></div><form method=\"post\" action=\"/login\"><label for=\"password\">Password</label><input id=\"password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" autofocus required><button type=\"submit\">Access Calculator</button>{error}<div class=\"hint\">Authorized users only</div></form></main></body></html>"""
-
-@app.before_request
-def require_login():
-    # Health check and login/logout must remain reachable without a session.
-    if request.path in {"/health", "/login", "/logout"}:
-        return None
-    if request.path.startswith("/api/") or request.path == "/":
-        if session.get("authenticated") is True:
-            return None
-        if request.path.startswith("/api/"):
-            return jsonify({"error": "Authentication required"}), 401
-        return redirect(url_for("login"))
-    # There are no other public application assets; keep them protected too.
-    if session.get("authenticated") is not True:
-        return redirect(url_for("login"))
-    return None
-
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        supplied = request.form.get("password", "")
-        if SITE_PASSWORD and hmac.compare_digest(supplied, SITE_PASSWORD):
-            session.clear()
-            session["authenticated"] = True
-            return redirect(url_for("home"))
-        return LOGIN_PAGE.replace('{error}', '<div class=\"error\">Incorrect password. Please try again.</div>'), 200
-    return LOGIN_PAGE.replace('{error}', '')
-
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect(url_for("login"))
-
-# Always return JSON for API failures. This prevents the browser from trying
-# to JSON.parse an HTML Flask/Render error page.
-@app.errorhandler(404)
-def api_404(error):
-    if request.path.startswith("/api/"):
-        return jsonify({"error": "API endpoint not found", "path": request.path}), 404
-    return error
-
-@app.errorhandler(500)
-def api_500(error):
-    if request.path.startswith("/api/"):
-        return jsonify({"error": "Internal server error", "detail": str(error)}), 500
-    return error
-
 TIPP_BASE = "https://www.tipp.gov.pk/index.php"
-
-WEBOC_TARIFF_URL = "https://www.weboc.gov.pk/Shared/TariffList.aspx"
-PSW_TARIFF_URL = "https://www.psw.gov.pk/public/utilities?service=tariff_sros"
-
-
-def _extract_category_rate(text, category):
-    """Extract the percentage associated with a specific WeBOC IT category.
-
-    WeBOC rows can contain several numbers (schedule/part/serial references)
-    before the actual rate.  Do not use the first percentage in the row.
-    """
-    t = clean_text(text)
-    low = t.lower()
-    if category == "commercial":
-        patterns = [
-            r"commercial\s+importer.{0,500}?@?\s*(\d+(?:\.\d+)?)\s*%",
-            r"commercial.{0,500}?import.{0,300}?@?\s*(\d+(?:\.\d+)?)\s*%",
-        ]
-    else:
-        patterns = [
-            r"industrial\s+undertaking.{0,500}?@?\s*(\d+(?:\.\d+)?)\s*%",
-            r"industrial\s+concern.{0,500}?@?\s*(\d+(?:\.\d+)?)\s*%",
-        ]
-    for pat in patterns:
-        m = re.search(pat, t, re.I)
-        if m:
-            return float(m.group(1)) / 100
-    return None
-
-
-def _parse_weboc_it_rates(html):
-    """Extract commercial/industrial import-stage IT rates from WeBOC Tariff & SROs."""
-    soup = BeautifulSoup(html or "", "html.parser")
-    out = {"commercial": None, "industrial": None,
-           "commercial_detail": None, "industrial_detail": None}
-
-    # The normal page has the two relevant rates in separate Exemptions / SROs
-    # table rows. Inspect every row containing Income Tax and a category phrase.
-    for tr in soup.find_all("tr"):
-        cells = [clean_text(c.get_text(" ", strip=True)) for c in tr.find_all(["th", "td"])]
-        if not cells:
-            continue
-        row = " | ".join(cells)
-        low = row.lower()
-        if "income tax" not in low:
-            continue
-        if "commercial importer" in low or ("commercial" in low and "import" in low):
-            rate = _extract_category_rate(row, "commercial")
-            if rate is not None:
-                out["commercial"] = rate
-                out["commercial_detail"] = row
-        if "industrial undertaking" in low or "industrial concern" in low:
-            rate = _extract_category_rate(row, "industrial")
-            if rate is not None:
-                out["industrial"] = rate
-                out["industrial_detail"] = row
-
-    # Some versions render the SRO section as divs/plain text rather than
-    # useful table rows. Split around Income Tax entries and inspect each
-    # category-specific block separately.
-    text = clean_text(soup.get_text(" ", strip=True))
-    for phrase, category in [
-        ("commercial importer", "commercial"),
-        ("industrial undertaking", "industrial"),
-        ("industrial concern", "industrial"),
-    ]:
-        if (category == "commercial" and out["commercial"] is not None) or (category == "industrial" and out["industrial"] is not None):
-            continue
-        pos = text.lower().find(phrase)
-        if pos >= 0:
-            chunk = text[max(0, pos-80):pos+700]
-            rate = _extract_category_rate(chunk, category)
-            if rate is not None:
-                out[category] = rate
-                out[category + "_detail"] = chunk
-
-    return out
-
-
-def _get_weboc_form(session, headers):
-    """Open a fresh WeBOC Tariff & SROs session and return its live form.
-
-    WeBOC uses ASP.NET cookieless sessions. The first GET may redirect to a
-    session-specific /Shared/TariffList.aspx URL. We keep the response that
-    created that session and submit its exact hidden fields/ViewState rather
-    than making a second GET that can create a different session.
-    """
-    try:
-        diag(stage="GET", requested_url=WEBOC_TARIFF_URL)
-        r = session.get(
-            WEBOC_TARIFF_URL,
-            timeout=(5, 12),
-            verify=False,
-            headers=headers,
-            allow_redirects=True,
-        )
-        if not r.ok:
-            return None, None, f"WeBOC returned HTTP {r.status_code}"
-        soup = BeautifulSoup(r.text, "html.parser")
-        form = soup.find("form", id="form1") or soup.find("form")
-        if not form:
-            return None, None, "WeBOC tariff form was not found"
-        return r.url, form, None
-    except requests.RequestException as exc:
-        return None, None, str(exc)
-
-
-def _psw_weboc_links(session, headers):
-    """Discover the exact session-specific WeBOC TariffList iframe URL from PSW.
-
-    PSW loads the WeBOC Tariff & SRO page as a cross-site iframe. The iframe
-    URL may be present as a normal HTML attribute, escaped JavaScript string,
-    JSON value, or relative URL. Keep this discovery deliberately broad.
-    """
-    links = []
-    try:
-        psw_headers = dict(headers)
-        psw_headers.update({
-            "Referer": "https://www.psw.gov.pk/",
-            "Sec-Fetch-Site": "same-origin",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-        })
-        r = session.get(
-            PSW_TARIFF_URL,
-            timeout=(5, 10),
-            verify=False,
-            headers=psw_headers,
-            allow_redirects=True,
-        )
-        if not r.ok:
-            return links
-
-        text = r.text or ""
-        soup = BeautifulSoup(text, "html.parser")
-
-        def normalize(value):
-            value = str(value)
-            return (value
-                    .replace("&amp;", "&")
-                    .replace("\\/", "/")
-                    .replace("\\u002F", "/")
-                    .replace("\\u003A", ":")
-                    .replace("\\u0026", "&"))
-
-        def add(value):
-            value = normalize(value).strip().strip('"\'')
-            if not value:
-                return
-            if re.search(r"(?:www\.)?weboc\.gov\.pk", value, re.I) and re.search(r"TariffList\.aspx", value, re.I):
-                links.append(urljoin(r.url, value))
-            elif re.match(r"^/\(S\([^)]*\)\)/Shared/TariffList\.aspx", value, re.I):
-                links.append(urljoin(r.url, value))
-
-        # HTML attributes: iframe src is the browser path we observed.
-        for tag in soup.find_all(True):
-            for attr in ("src", "data-src", "data-url", "data-href", "href", "value"):
-                value = tag.get(attr)
-                if value:
-                    add(value)
-
-        # Raw HTML / JavaScript / JSON. These patterns intentionally use single
-        # regex escapes; raw Python strings must contain \. rather than \\.
-        patterns = [
-            r'https?://(?:www\.)?weboc\.gov\.pk/[^"\'<>\s]*TariffList\.aspx[^"\'<>\s]*',
-            r'https?:\\/\\/(?:www\.)?weboc\.gov\.pk\\/[^"\'<>\s]*TariffList\.aspx[^"\'<>\s]*',
-            r'https?:\\u002F\\u002F(?:www\.)?weboc\.gov\.pk\\u002F[^"\'<>\s]*TariffList\.aspx[^"\'<>\s]*',
-            r'/(?:S\([^)]*\)/)?Shared/TariffList\.aspx[^"\'<>\s]*',
-        ]
-        for pat in patterns:
-            for match in re.findall(pat, text, flags=re.I):
-                add(match)
-
-        # Look around every TariffList occurrence; this catches JS variables
-        # whose URL is assembled or quoted differently.
-        for m in re.finditer(r'TariffList\.aspx', text, flags=re.I):
-            chunk = text[max(0, m.start() - 500):min(len(text), m.end() + 500)]
-            for candidate in re.findall(r'https?[^"\'\s<>]+|/(?:S\([^)]*\)/)?Shared/TariffList\.aspx[^"\'\s<>]*', chunk, flags=re.I):
-                add(candidate)
-
-    except requests.RequestException:
-        pass
-    except Exception:
-        pass
-
-    unique = list(dict.fromkeys(links))
-    unique.sort(key=lambda u: (
-        0 if re.search(r"/\(S\([^)]*\)\)/Shared/TariffList\.aspx", u, re.I) else 1,
-        len(u)
-    ))
-    return unique
-
-def _weboc_search_once(hs8, diagnostics=None):
-    """Query WeBOC exactly like the browser's Tariff & SROs form.
-
-    WeBOC uses ASP.NET cookieless sessions. A browser first obtains a
-    session-specific /Shared/TariffList.aspx URL, then POSTs the live
-    ViewState/EventValidation plus TariffList$txtSearch and
-    TariffList$btnSearch. We reproduce that flow with one requests.Session so
-    the session URL and cookies remain paired. No tariff or tax rates are
-    hard-coded here.
-    """
-    browser_headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:157.0) "
-            "Gecko/20100101 Firefox/157.0"
-        ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br, zstd",
-        "Cache-Control": "no-cache",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "iframe",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "same-origin",
-        "Sec-Fetch-User": "?1",
-    }
-
-    def diag(**kwargs):
-        if diagnostics is not None:
-            diagnostics.update(kwargs)
-
-    def discover_session_url(session, bootstrap_url):
-        """GET the page and return the exact session-specific URL + form HTML."""
-        headers = dict(browser_headers)
-        headers["Referer"] = "https://www.weboc.gov.pk/"
-        r = session.get(
-            bootstrap_url,
-            timeout=(2, 5),
-            verify=False,
-            headers=headers,
-            allow_redirects=True,
-        )
-        diag(
-            bootstrap_status=r.status_code,
-            bootstrap_url=bootstrap_url,
-            session_url=r.url,
-            redirect_chain=[h.url + " -> " + h.headers.get("Location", "") for h in r.history],
-            cookies=session.cookies.get_dict(),
-            content_length=len(r.text or ""),
-        )
-        if not r.ok:
-            raise RuntimeError(f"WeBOC GET returned HTTP {r.status_code} ({r.url})")
-
-        # The final response URL is authoritative. If the server did not put
-        # the session id into the URL, look for a cookieless session URL in
-        # redirects or HTML before giving up.
-        candidates = [r.url]
-        for h in r.history:
-            loc = h.headers.get("Location")
-            if loc:
-                candidates.append(urljoin(h.url, loc))
-        for candidate in re.findall(
-            r"https?://www\.weboc\.gov\.pk/\(S\([^\)]+\)\)/Shared/TariffList\.aspx[^\"'\s<>]*",
-            r.text,
-            flags=re.I,
-        ):
-            candidates.append(candidate)
-
-        session_url = next(
-            (u for u in candidates if re.search(r"/\(S\([^\)]+\)\)/Shared/TariffList\.aspx", u, re.I)),
-            r.url,
-        )
-        soup = BeautifulSoup(r.text, "html.parser")
-        form = soup.find("form", id="form1") or soup.find("form")
-        if not form:
-            title = clean_text(soup.title.get_text(" ", strip=True)) if soup.title else ""
-            raise RuntimeError(
-                f"WeBOC tariff form was not found (final URL: {session_url}; title: {title[:120]})"
-            )
-        return session_url, form
-
-    def post_search(session, session_url, form):
-        # Reproduce the browser's application/x-www-form-urlencoded payload:
-        # all hidden ASP.NET state + the exact search field + Search button.
-        data = {}
-        for inp in form.find_all("input"):
-            name = inp.get("name")
-            if not name:
-                continue
-            typ = (inp.get("type") or "text").lower()
-            if typ == "hidden":
-                data[name] = inp.get("value", "")
-
-        search_name = "TariffList$txtSearch"
-        if search_name not in {i.get("name") for i in form.find_all("input") if i.get("name")}:
-            candidates = []
-            for inp in form.find_all("input"):
-                name = inp.get("name") or ""
-                ident = (name + " " + (inp.get("id") or "")).lower()
-                typ = (inp.get("type") or "text").lower()
-                if typ in {"text", "search"} and any(
-                    k in ident for k in ("hscode", "pct", "hs_code", "search", "txtsearch")
-                ):
-                    candidates.append(name)
-            if candidates:
-                search_name = candidates[0]
-
-        if not search_name:
-            raise RuntimeError("WeBOC HS search field was not found")
-
-        data[search_name] = hs8[:4] + "." + hs8[4:]
-        data["TariffList$btnSearch"] = "Search"
-
-        action = urljoin(session_url, form.get("action") or session_url)
-        post_headers = dict(browser_headers)
-        post_headers.update({
-            "Referer": session_url,
-            "Origin": "https://www.weboc.gov.pk",
-            "Content-Type": "application/x-www-form-urlencoded",
-        })
-        diag(
-            post_url=action,
-            search_field=search_name,
-            search_value=data[search_name],
-            viewstate_present=bool(data.get("__VIEWSTATE")),
-            eventvalidation_present=bool(data.get("__EVENTVALIDATION")),
-            post_cookie=session.cookies.get_dict(),
-        )
-
-        post = session.post(
-            action,
-            data=data,
-            timeout=(2, 7),
-            verify=False,
-            headers=post_headers,
-            allow_redirects=True,
-        )
-        diag(
-            post_status=post.status_code,
-            post_url=post.url,
-            post_history=[h.url + " -> " + h.headers.get("Location", "") for h in post.history],
-            post_content_length=len(post.text or ""),
-        )
-        if not post.ok:
-            raise RuntimeError(f"WeBOC POST returned HTTP {post.status_code} ({post.url})")
-
-        page_text = clean_text(BeautifulSoup(post.text, "html.parser").get_text(" ", strip=True))
-        diag(
-            final_page_chars=len(page_text),
-            has_income_tax="income tax" in page_text.lower(),
-            has_commercial_importer="commercial importer" in page_text.lower(),
-            has_industrial_undertaking="industrial undertaking" in page_text.lower(),
-            has_exemptions_sros="exemptions / sros" in page_text.lower(),
-        )
-        if len(page_text) < 100:
-            raise RuntimeError(
-                f"WeBOC returned an unexpectedly short page ({len(page_text)} chars; {post.url})"
-            )
-        return post.text
-
-    errors = []
-
-    # PRIMARY: PSW -> session-specific WeBOC iframe.
-    # The user's browser capture shows PSW loading WeBOC as a cross-site iframe
-    # with a URL of the form /\(S(... )\)/Shared/TariffList.aspx. Start there so
-    # Render does not have to manufacture or bootstrap a WeBOC session.
-    try:
-        session = WebocProxySession()
-        session.headers.update(browser_headers)
-        discovered = _psw_weboc_links(session, browser_headers)
-        diag(psw_discovered_urls=discovered[:5])
-        for url in discovered[:5]:
-            try:
-                # If PSW already supplied the exact session URL, GET it directly.
-                # This GET establishes the ASP.NET form/ViewState for that same
-                # session, then post_search submits the PCT.
-                session_url, form = discover_session_url(session, url)
-                html = post_search(session, session_url, form)
-                if html:
-                    return html, None
-            except Exception as exc:
-                errors.append("psw->weboc: " + str(exc))
-    except Exception as exc:
-        errors.append("psw bootstrap: " + str(exc))
-
-    # SECONDARY: direct WeBOC bootstrap. Kept as a fallback for environments
-    # where direct WeBOC is reachable but PSW's HTML hides the iframe URL.
-    try:
-        session = WebocProxySession()
-        session.headers.update(browser_headers)
-        session_url, form = discover_session_url(session, WEBOC_TARIFF_URL)
-        html = post_search(session, session_url, form)
-        if html:
-            return html, None
-    except Exception as exc:
-        errors.append("direct: " + str(exc))
-
-    return None, "; ".join(errors) or "WeBOC tariff page could not be queried"
-
-def _weboc_search_form(_session, hs8):
-    """Try the live WeBOC tariff form twice, with independent sessions."""
-    errors = []
-    for attempt in range(1):
-        html, error = _weboc_search_once(hs8)
-        if html:
-            return html
-        errors.append(f"attempt {attempt + 1}: {error or 'unknown error'}")
-    return None, "; ".join(errors)
-
-def weboc_income_tax_rates(session, hs8):
-    """Fetch Commercial and Industrial Income Tax rates from live WeBOC.
-
-    The Cloudflare Worker /weboc endpoint is the preferred live path. It
-    establishes the WeBOC ASP.NET session and returns importer-specific rates.
-    The original v55 direct WeBOC path remains as a secondary fallback.
-    There is NO hard-coded rate fallback.
-    """
-    hs8 = re.sub(r"[^0-9]", "", str(hs8))[:8]
-    result = {
-        "commercial": None, "industrial": None,
-        "commercial_detail": None, "industrial_detail": None,
-        "source": WEBOC_TARIFF_URL, "error": None
-    }
-    if len(hs8) != 8:
-        result["error"] = "Invalid HS code"
-        return result
-
-    proxy = os.getenv("WEBOC_PROXY_URL", "").strip().rstrip("/")
-    if proxy:
-        try:
-            r = requests.get(f"{proxy}/weboc", params={"hs": hs8}, timeout=45)
-            r.raise_for_status()
-            data = r.json()
-            commercial = data.get("commercial")
-            industrial = data.get("industrial")
-            if commercial is not None or industrial is not None:
-                result.update({
-                    "commercial": commercial,
-                    "industrial": industrial,
-                    "source": "WeBOC Tariff & SROs via live proxy",
-                    "weboc_url": data.get("weboc_url"),
-                    "post_status": data.get("post_status"),
-                })
-                if commercial is None:
-                    result["error"] = "WeBOC did not return a Commercial Importer income-tax rate for this PCT"
-                elif industrial is None:
-                    result["error"] = "WeBOC did not return an Industrial Undertaking income-tax rate for this PCT"
-                return result
-            result["proxy_error"] = data.get("error") or "Live proxy returned no importer-specific rates"
-        except Exception as exc:
-            result["proxy_error"] = str(exc)
-
-    try:
-        html_result = _weboc_search_form(session, hs8)
-        if isinstance(html_result, tuple):
-            html, query_error = html_result
-        else:
-            html, query_error = html_result, None
-        if not html:
-            result["error"] = query_error or result.get("proxy_error") or "WeBOC tariff page could not be queried"
-            return result
-        result.update(_parse_weboc_it_rates(html))
-        if result.get("commercial") is None:
-            result["error"] = "WeBOC did not return a Commercial Importer income-tax rate for this PCT"
-        elif result.get("industrial") is None:
-            result["error"] = "WeBOC did not return an Industrial Undertaking income-tax rate for this PCT"
-        return result
-    except Exception as exc:
-        result["error"] = result.get("proxy_error") or str(exc)
-        return result
-
-
-# Local CPFTA tariff-elimination schedule converted from the supplied
-# Pakistan-China FTA Excel schedule. Keeping the schedule local avoids
-# downloading/parsing a large PDF on Render for every tariff lookup.
-CPFTA_DATA_FILE = os.path.join(os.path.dirname(__file__), "data", "cpfta_rates.csv")
-CPFTA_SRO_URL = "https://download1.fbr.gov.pk/SROs/201912311712571769CPFTASRO1640%28I%29201931.12.2019.pdf"
-CPFTA_DATA_CACHE = None
-TIPP_INDEX_FILE = os.environ.get("TIPP_INDEX_FILE", os.path.join(os.path.dirname(__file__), "data", "tipp_record_index.json"))
-TIPP_INDEX_LOCK = threading.Lock()
 
 # TIPP's public product-search page exposes HS codes, but currently does not
 # reliably expose the commodity record ID needed by the detail page.
 # This is a verified live TIPP mapping for the test code we have been using.
 # The detail page itself is fetched live, so the tariff values are NOT hard-coded.
-def _load_tipp_index():
-    try:
-        with open(TIPP_INDEX_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError, TypeError):
-        return {}
-
-
-def _save_tipp_mapping(hs8, tipp_code, record_id, resolution="tipp-search"):
-    if not hs8 or not tipp_code or not record_id:
-        return
-    os.makedirs(os.path.dirname(TIPP_INDEX_FILE), exist_ok=True)
-    with TIPP_INDEX_LOCK:
-        data = _load_tipp_index()
-        entry = data.setdefault(str(hs8), [])
-        item = {"tipp_code": str(tipp_code), "record_id": str(record_id), "resolution": resolution}
-        if not any(str(x.get("tipp_code")) == str(tipp_code) and str(x.get("record_id")) == str(record_id) for x in entry if isinstance(x, dict)):
-            entry.append(item)
-        tmp = TIPP_INDEX_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
-        os.replace(tmp, TIPP_INDEX_FILE)
-
-
-def _cached_tipp_ids(hs8, tipp_code):
-    data = _load_tipp_index()
-    rows = data.get(str(hs8), [])
-    out=[]
-    for row in rows if isinstance(rows, list) else []:
-        if not isinstance(row, dict):
-            continue
-        tc=str(row.get("tipp_code", ""))
-        if tc == str(tipp_code) or (len(str(tipp_code)) == 12 and tc.startswith(str(tipp_code)[:8])):
-            rid=str(row.get("record_id", ""))
-            if rid and rid not in out:
-                out.append(rid)
-    return out
-
-
 VERIFIED_RECORD_IDS = {
     "950300900000": "23226",
     "961590900000": "23343",
     "720449900000": "19547",
-    # TIPP search currently returns HTTP 200 for these codes but does not
-    # expose the internal commodity/detail ID. These IDs were verified from
-    # the corresponding current TIPP detail records.
-    "871140100000": "22712",
-    "721911000000": "19708",
-    "570339900000": "26954",
-    "560811000000": "18692",
-    "630910100000": "19208",
-    "570329200000": "26949",
-    "551612000000": "18647",
 }
 
 
@@ -681,433 +59,119 @@ def numeric_id_from_href(href):
     return match.group(1) if match else None
 
 
-def page_has_code(html, tipp_code, prefix_code=None):
-    """Verify a TIPP detail page.
-
-    For a real 12-digit TIPP commodity we require the exact code.  For an
-    8-digit PCT entered by the user, TIPP may represent that PCT with one or
-    more 12-digit commodity records (for example 85362010 -> 853620101000).
-    In that case a detail record beginning with the requested 8-digit PCT is
-    a valid resolution.
-    """
-    text = BeautifulSoup(html, "html.parser").get_text(" ")
-    page_digits = re.sub(r"[^0-9]", "", text)
+def page_has_code(html, tipp_code):
     compact = re.sub(r"[^0-9]", "", tipp_code)
-    if compact in page_digits:
-        return True
-    if prefix_code:
-        prefix = re.sub(r"[^0-9]", "", prefix_code)
-        # Look for a 12-digit TIPP code beginning with the requested PCT.
-        return re.search(r"(?<!\d)" + re.escape(prefix) + r"\d{4}(?!\d)", text) is not None
-    return False
-
-
-def _href_record_id(value):
-    """Extract a TIPP commodity/detail record id from any HTML attribute."""
-    if not value:
-        return None
-    value = str(value)
-    # Decode common HTML/JS/URL escaping used by Yii grids and search engines.
-    from urllib.parse import unquote
-    for _ in range(3):
-        value = unquote(value).replace("&amp;", "&").replace("\\u003d", "=").replace("\\u0026", "&")
-    rid = numeric_id_from_href(value)
-    if rid:
-        return rid
-    # Some TIPP/Yii links put the id in JavaScript/on* attributes rather than href.
-    m = re.search(r'(?:[?&]|\\?&|\\b)id(?:=|%3D)(\\d+)', value, re.I)
-    return m.group(1) if m else None
+    page_digits = re.sub(r"[^0-9]", "", BeautifulSoup(html, "html.parser").get_text(" "))
+    return compact in page_digits
 
 
 def record_id_from_html(html, requested_code):
-    """Robustly map a TIPP HS/PCT shown in search HTML to its record id.
-
-    TIPP's grid has used several markup variants over time.  The old mapper
-    assumed the HS code and detail link were in one very specific row shape.
-    Instead we inspect the whole row, nearby table/container ancestors, all
-    link/JS/data attributes, and finally the raw HTML around every occurrence
-    of the requested code.
-    """
-    soup = BeautifulSoup(html or "", "html.parser")
-    compact = re.sub(r"[^0-9]", "", str(requested_code))
-    prefix = compact[:8] if len(compact) >= 8 else compact
-    candidates = []
-
-    def score_context(ctx):
-        digits = re.sub(r"[^0-9]", "", ctx or "")
-        score = 0
-        if compact and compact in digits:
-            score += 100
-        if prefix and prefix in digits:
-            score += 50
-        return score
-
-    def collect_links(node, base_score=0):
-        if not node:
-            return
-        for a in node.find_all(["a", "area", "button", "input"], href=True):
-            rid = _href_record_id(a.get("href"))
-            if rid:
-                candidates.append((base_score + 20, rid))
-        # Inspect all attributes because Yii grids can store the destination
-        # in data-url/data-href/data-id or an onclick handler.
-        for tag in node.find_all(True):
-            attrs = tag.attrs or {}
-            for name, value in attrs.items():
-                vals = value if isinstance(value, list) else [value]
-                for val in vals:
-                    rid = _href_record_id(val)
-                    if rid:
-                        candidates.append((base_score + 10, rid))
-                    elif isinstance(val, str):
-                        m = re.search(r'(?:id(?:=|%3D))(\d+)', val, re.I)
-                        if m:
-                            candidates.append((base_score + 8, m.group(1)))
-
-    # First: table rows. This is the most reliable association: the HS code
-    # and its File/detail link are normally cells in the same grid row.
-    for row in soup.find_all("tr"):
-        ctx = clean_text(row.get_text(" ", strip=True))
-        score = score_context(ctx)
-        if score:
-            collect_links(row, score)
-            rid = row.get("data-id") or row.get("data-key") or row.get("data-record-id") or row.get("data-product-id")
-            if rid and re.fullmatch(r"\d+", str(rid).strip()):
-                candidates.append((score + 30, str(rid).strip()))
-
-    # Second: locate an element containing the code and walk up a few levels.
-    # This handles div/grid layouts where there is no useful <tr>.
-    for node in soup.find_all(string=re.compile(re.escape(compact))):
-        parent = node.parent
-        for level in range(5):
-            if not parent:
-                break
-            ctx = clean_text(parent.get_text(" ", strip=True))
-            score = score_context(ctx) - level * 3
-            if score > 0:
-                collect_links(parent, score)
-            parent = parent.parent
-
-    # Third: raw HTML proximity. This catches links embedded in JSON or
-    # JavaScript generated by the grid. Search a generous window around the
-    # exact code and its 8-digit prefix.
-    raw = html or ""
-    needles = [n for n in (compact, prefix) if n]
-    for needle in needles:
-        for m in re.finditer(re.escape(needle), raw):
-            lo, hi = max(0, m.start()-2500), min(len(raw), m.end()+2500)
-            chunk = raw[lo:hi]
-            # Direct href/data-url/onClick occurrences.
-            for mm in re.finditer(r'(?:href|data-[\\w-]+|onclick)\\s*=\\s*["\\\']([^"\\\']+)["\\\']', chunk, re.I):
-                rid = _href_record_id(mm.group(1))
-                if rid:
-                    candidates.append((80 if needle == compact else 60, rid))
-            # Any TIPP detail URL encoded in JSON/script.
-            for mm in re.finditer(r'https?[^"\\\']*tipp\\.gov\\.pk[^"\\\']*', chunk, re.I):
-                rid = _href_record_id(mm.group(0))
-                if rid:
-                    candidates.append((70 if needle == compact else 55, rid))
-            # Plain id=123 close to the HS code.
-            for mm in re.finditer(r'(?:[?&]|%3F|%26)id(?:=|%3D)(\\d+)', chunk, re.I):
-                candidates.append((65 if needle == compact else 50, mm.group(1)))
-
-    # De-duplicate while retaining the strongest evidence for each ID.
-    best = {}
-    for score, rid in candidates:
-        if rid and (rid not in best or score > best[rid]):
-            best[rid] = score
-    if not best:
-        return None
-    return max(best.items(), key=lambda kv: (kv[1], -int(kv[0])))[0]
-
-def _extract_tipp_detail_ids_from_search_html(html, requested_code):
-    """Extract candidate TIPP detail IDs from a search-engine result page.
-
-    We never trust a search-engine result by itself. lookup() subsequently
-    downloads the TIPP detail page and verifies that the requested 12-digit
-    code is actually present on that page.
-    """
-    soup = BeautifulSoup(html or "", "html.parser")
+    soup = BeautifulSoup(html, "html.parser")
     compact = re.sub(r"[^0-9]", "", requested_code)
-    candidates = []
 
-    def add_candidate(href, context=""):
-        if not href:
-            return
-        href = (href.replace("&amp;", "&")
-                    .replace("\\u003d", "=")
-                    .replace("\\u0026", "&"))
-        # Google/Bing may wrap the destination URL in redirect parameters.
-        decoded = href
-        for _ in range(2):
-            from urllib.parse import unquote, parse_qs, urlparse
-            decoded = unquote(decoded)
-            parsed = urlparse(decoded)
-            qs = parse_qs(parsed.query)
-            for key in ("url", "u", "uddg"):
-                if qs.get(key):
-                    decoded = qs[key][0]
-                    break
-        if "tipp.gov.pk" not in decoded.lower():
-            return
-        rid = numeric_id_from_href(decoded)
-        if not rid:
-            return
-        ctx_digits = re.sub(r"[^0-9]", "", context or "")
-        score = 0
-        if compact in ctx_digits:
-            score += 10
-        if "tradeInfo/view" in decoded or "tradeInfo%2Fview" in decoded:
-            score += 5
-        candidates.append((score, rid))
-
-    for a in soup.find_all("a", href=True):
-        ctx = clean_text(a.get_text(" ", strip=True))
-        parent = a.parent
-        if parent:
-            ctx = clean_text(parent.get_text(" ", strip=True)) + " " + ctx
-        add_candidate(a.get("href"), ctx)
-
-    # Raw HTML catches result links that are encoded in script/JSON blobs.
-    for m in re.finditer(r'https?://[^"\'<> ]*tipp\.gov\.pk[^"\'<> ]+', html or "", re.I):
-        add_candidate(m.group(0), html[max(0, m.start()-500):m.end()+500])
-
-    seen = set()
-    out = []
-    for score, rid in sorted(candidates, key=lambda x: (-x[0], int(x[1]))):
-        if rid not in seen:
-            seen.add(rid)
-            out.append(rid)
-    return out
-
-
-def _tradeinfo_index_one(session, field, code):
-    """Use TIPP's actual Search Commodity page before the older searchProduct page.
-
-    TIPP documents that its commodity search accepts 2/4/6/8/12 digit HS codes.
-    The application page is the authoritative resolver for a commodity lookup;
-    searchProduct is only a fallback because it often omits the detail-record link.
-    """
-    params = {"r": "tradeInfo/index", field: code}
-    try:
-        response = session.get(TIPP_BASE, params=params, timeout=7, verify=False, headers={"User-Agent":"Mozilla/5.0"})
-        if not response.ok:
-            return []
-        html=response.text
-        soup=BeautifulSoup(html, "html.parser")
-        wanted=re.sub(r"[^0-9]", "", str(code))
-        page_digits=re.sub(r"[^0-9]", "", soup.get_text(" "))
-        if wanted not in page_digits:
-            return []
-        ids=[]
-        for a in soup.find_all("a", href=True):
-            rid=numeric_id_from_href(a.get("href"))
-            if not rid:
-                continue
-            context=clean_text(a.parent.get_text(" ", strip=True)) if a.parent else ""
-            context_digits=re.sub(r"[^0-9]", "", context)
-            if wanted in context_digits or "tradeinfo/view" in a.get("href", "").lower():
-                if rid not in ids:
-                    ids.append(rid)
-        rid=record_id_from_html(html, code)
-        if rid and rid not in ids:
-            ids.insert(0,rid)
-        return ids
-    except requests.RequestException:
-        return []
-
-
-def _tipp_search_one(session, field, tipp_code):
-    """Search TIPP using one possible filter-field name.
-
-    TIPP is a Yii application and its public search form has changed field
-    naming over time. We therefore try several likely model/filter names and
-    only accept a response if the requested code is actually present.
-    """
-    params = {"r": "tradeInfo/searchProduct", field: tipp_code, "Product_page": "1"}
-    try:
-        response = session.get(TIPP_BASE, params=params, timeout=5, verify=False)
-        if not response.ok:
-            return []
-        html = response.text
-        # Do not mistake the normal 47,406-row landing page for a successful
-        # filtered search. The exact code must occur in the returned table.
-        compact = re.sub(r"[^0-9]", "", tipp_code)
-        digits = re.sub(r"[^0-9]", "", BeautifulSoup(html, "html.parser").get_text(" "))
-        if compact not in digits:
-            return []
-        ids = _extract_tipp_detail_ids_from_search_html(html, tipp_code)
-        rid = record_id_from_html(html, tipp_code)
-        if rid and rid not in ids:
-            ids.insert(0, rid)
-        return ids
-    except requests.RequestException:
-        return []
-
-
-def _validate_tipp_id(session, rid, tipp_code, prefix_code=None):
-    # TIPP sometimes changes the default sort/query on its detail page.
-    # Try a few equivalent detail URLs before rejecting a valid record.
-    urls = [
-        f"{TIPP_BASE}?id={quote_plus(str(rid))}&r=tradeInfo%2Fview",
-        f"{TIPP_BASE}?id={quote_plus(str(rid))}&r=tradeInfo%2Fview&sort=rate",
-        f"{TIPP_BASE}?id={quote_plus(str(rid))}&r=tradeInfo%2Fview&sort=valid_from",
-        f"{TIPP_BASE}?id={quote_plus(str(rid))}&r=tradeInfo%2Fview&sort=groups.full_name.desc",
-    ]
-    headers={"User-Agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1"}
-    for detail_url in urls:
-        try:
-            detail = session.get(detail_url, timeout=7, verify=False, headers=headers, allow_redirects=True)
-            if not detail.ok:
-                continue
-            if page_has_code(detail.text, tipp_code, prefix_code=prefix_code):
-                return str(rid)
-        except requests.RequestException:
+    # Prefer links that explicitly contain the requested code in the same row.
+    for row in soup.find_all("tr"):
+        row_text = re.sub(r"[^0-9]", "", row.get_text(" ", strip=True))
+        if compact not in row_text:
             continue
+        for link in row.find_all("a", href=True):
+            record_id = numeric_id_from_href(link.get("href"))
+            if record_id:
+                return record_id
+        for attr in ("data-key", "data-id", "data-record-id", "data-product-id"):
+            value = row.get(attr)
+            if value and re.fullmatch(r"\d+", str(value).strip()):
+                return str(value).strip()
+
+    # Then inspect any detail/view link whose nearby text contains the code.
+    for link in soup.find_all("a", href=True):
+        record_id = numeric_id_from_href(link.get("href"))
+        if not record_id:
+            continue
+        context = clean_text(link.parent.get_text(" ", strip=True)) if link.parent else ""
+        if compact in re.sub(r"[^0-9]", "", context):
+            return record_id
+
     return None
 
 
-def _search_tipp_external(session, tipp_code, prefix_code=None):
-    """Last-resort public-web discovery, kept to one short request.
+def search_tipp(session, tipp_code):
+    # First use a verified mapping where one exists. The tariff page is still
+    # downloaded live, so changes on TIPP are reflected automatically.
+    if tipp_code in VERIFIED_RECORD_IDS:
+        return VERIFIED_RECORD_IDS[tipp_code], "verified-record-map"
 
-    This is deliberately a fallback only. TIPP itself remains authoritative;
-    any discovered ID is validated against the live TIPP detail page.
-    """
-    import urllib.parse
-    search_code = prefix_code or tipp_code
-    q = urllib.parse.quote(f'site:tipp.gov.pk "{search_code}" "tradeInfo/view"')
-    queries = [
-        f'site:tipp.gov.pk "{search_code}" "tradeInfo/view"',
-        f'site:tipp.gov.pk/index.php?id= "{search_code}"',
+    # TIPP has changed its search implementation over time. Try the common
+    # Yii field names with both GET and POST, and only accept a real record ID.
+    field_names = [
+        "Product[hscode]",
+        "Product[hs_code]",
+        "Product[hsCode]",
+        "SearchProduct[hscode]",
+        "SearchProduct[hs_code]",
+        "SearchProduct[hsCode]",
+        "TradeInfo[hscode]",
+        "TradeInfo[hs_code]",
+        "hscode",
+        "hs_code",
+        "HSCode",
+        "code",
     ]
-    urls = []
-    for query in queries:
-        enc = urllib.parse.quote(query)
-        urls.extend([f"https://www.google.com/search?q={enc}", f"https://www.bing.com/search?q={enc}"])
-    def one(url):
+
+    last_status = "unknown"
+    search_url = f"{TIPP_BASE}?r=tradeInfo/searchProduct"
+
+    for field in field_names:
+        params = {"r": "tradeInfo/searchProduct", field: tipp_code}
+        for method in ("get", "post"):
+            try:
+                if method == "get":
+                    response = session.get(TIPP_BASE, params=params, timeout=25, verify=False)
+                else:
+                    response = session.post(TIPP_BASE, data=params, timeout=25, verify=False)
+
+                last_status = response.status_code
+                if not response.ok:
+                    continue
+
+                record_id = record_id_from_html(response.text, tipp_code)
+                if record_id:
+                    return record_id, response.url
+
+            except requests.RequestException:
+                continue
+
+    # Last-resort fallback: TIPP's public search page can return HTTP 200 without
+    # exposing the internal commodity ID. Search engines often have the indexed
+    # TIPP detail URL, which contains the ID. This is only a discovery fallback;
+    # tariff data is still fetched directly from TIPP after the ID is found.
+    search_queries = [
+        f'site:tipp.gov.pk/index.php "{tipp_code}" "Code" "r=tradeInfo/view"',
+        f'site:tipp.gov.pk/index.php "{tipp_code}" "Commodity"',
+    ]
+    for q in search_queries:
         try:
-            r = session.get(url, timeout=4, verify=False, headers={"User-Agent":"Mozilla/5.0"})
-            if r.ok:
-                return _extract_tipp_detail_ids_from_search_html(r.text, tipp_code)
+            bing = session.get("https://www.google.com/search", params={"q": q}, timeout=15,
+                               headers={"User-Agent": "Mozilla/5.0"}, verify=False)
+            if bing.ok:
+                record_id = record_id_from_html(bing.text, tipp_code)
+                if record_id:
+                    return record_id, "search-engine-fallback"
+                # Google result links may be wrapped; extract any direct TIPP URL.
+                for match in re.finditer(r'https?://(?:www\.)?tipp\.gov\.pk/index\.php[^\"<> ]+', bing.text):
+                    url = match.group(0).replace('\\u003d', '=').replace('\\u0026', '&')
+                    record_id = numeric_id_from_href(url)
+                    if record_id:
+                        return record_id, "search-engine-fallback"
         except requests.RequestException:
-            return []
-        return []
-    # Do not wait on slow providers serially.
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [pool.submit(one, u) for u in urls]
-        ids=[]
-        for f in as_completed(futures):
-            try:
-                for rid in f.result():
-                    if rid not in ids: ids.append(rid)
-            except Exception:
-                pass
-    return ids[:4]
-
-
-def search_tipp(session, tipp_code, prefix_code=None):
-    """Universal, self-building TIPP resolver.
-
-    The cache is keyed by the 8-digit PCT and may contain multiple TIPP
-    12-digit commodity records. A lookup first uses the cache, then TIPP's
-    documented commodity-search page, then searchProduct, and finally the
-    small public-web fallback. Every accepted record is verified against the
-    live detail page and written to the local index.
-    """
-    hs8 = re.sub(r"[^0-9]", "", prefix_code or tipp_code)[:8]
-
-    # Seed mappings are also copied into the self-building index.
-    seed = VERIFIED_RECORD_IDS.get(tipp_code)
-    cached = _cached_tipp_ids(hs8, tipp_code)
-    candidate_ids=[]
-    if seed:
-        candidate_ids.append(str(seed))
-    for rid in cached:
-        if rid not in candidate_ids:
-            candidate_ids.append(rid)
-
-    # Validate cached/seed records first; this makes repeat lookups fast.
-    for rid in candidate_ids:
-        valid=_validate_tipp_id(session, rid, tipp_code, prefix_code=prefix_code)
-        if valid:
-            # For 8-digit input, the detail page may expose the actual 12-digit code.
-            _save_tipp_mapping(hs8, tipp_code if len(tipp_code)==12 else tipp_code, valid, "cache")
-            return valid, "cache"
-
-    fields=[
-        "TradeInfo[hscode]", "TradeInfo[hs_code]", "TradeInfo[hsCode]",
-        "TradeInfo[hscode1]", "hscode", "hs_code",
-        "Product[hscode]", "Product[hs_code]", "Product[hsCode]",
-        "Product[hs]", "Product[Hscode]", "ProductSearch[hscode]",
-        "ProductSearch[hs_code]",
-    ]
-
-    # TIPP's own commodity search is tried with both the exact 12-digit code
-    # and the 8-digit PCT. This is the key fix: an 8-digit PCT is allowed to
-    # resolve to any matching 12-digit commodity record.
-    search_codes=[tipp_code]
-    if prefix_code and prefix_code != tipp_code:
-        search_codes.append(prefix_code)
-    with ThreadPoolExecutor(max_workers=min(12, len(fields)*len(search_codes))) as pool:
-        futures=[]
-        for code in search_codes:
-            for field in fields:
-                futures.append(pool.submit(_tradeinfo_index_one, session, field, code))
-        for f in as_completed(futures):
-            try:
-                for rid in f.result():
-                    if rid and str(rid) not in candidate_ids:
-                        candidate_ids.append(str(rid))
-            except Exception:
-                pass
-
-    # Older searchProduct endpoint as a fallback.
-    with ThreadPoolExecutor(max_workers=len(fields)) as pool:
-        futures=[pool.submit(_tipp_search_one, session, f, tipp_code) for f in fields]
-        for f in as_completed(futures):
-            try:
-                for rid in f.result():
-                    if rid and str(rid) not in candidate_ids:
-                        candidate_ids.append(str(rid))
-            except Exception:
-                pass
-
-    if prefix_code and prefix_code != tipp_code:
-        with ThreadPoolExecutor(max_workers=len(fields)) as pool:
-            futures=[pool.submit(_tipp_search_one, session, f, prefix_code) for f in fields]
-            for f in as_completed(futures):
-                try:
-                    for rid in f.result():
-                        if rid and str(rid) not in candidate_ids:
-                            candidate_ids.append(str(rid))
-                except Exception:
-                    pass
-
-    # Verify a bounded number of candidates. For an 8-digit PCT, any verified
-    # TIPP commodity beginning with that PCT is acceptable.
-    if candidate_ids:
-        with ThreadPoolExecutor(max_workers=min(8, len(candidate_ids))) as pool:
-            futures=[pool.submit(_validate_tipp_id, session, rid, tipp_code, prefix_code=prefix_code) for rid in candidate_ids[:12]]
-            for f in as_completed(futures):
-                try:
-                    valid=f.result()
-                    if valid:
-                        _save_tipp_mapping(hs8, tipp_code, valid, "tipp-search")
-                        return valid, "tipp-search"
-                except Exception:
-                    pass
-
-    # Last resort: public-web discovery, still followed by exact verification.
-    for rid in _search_tipp_external(session, tipp_code, prefix_code=prefix_code):
-        valid=_validate_tipp_id(session, rid, tipp_code, prefix_code=prefix_code)
-        if valid:
-            _save_tipp_mapping(hs8, tipp_code, valid, "web-discovery")
-            return valid, "web-discovery"
+            pass
 
     raise RuntimeError(
-        f"TIPP could not resolve the exact commodity record for {tipp_code}. "
-        "TIPP did not return a verifiable detail record for this HS/PCT code."
+        f"TIPP returned HTTP {last_status} but could not locate the commodity record for {tipp_code}. "
+        "TIPP's current public search page may return HTTP 200 without exposing the detail-record key. "
+        "Try the 8-digit PCT code again or use a current TIPP detail link."
     )
+
 
 def extract_commodity_info(soup, tipp_code):
     text = clean_text(soup.get_text(" ", strip=True))
@@ -1136,87 +200,92 @@ def table_headers(table):
     return [clean_text(c.get_text(" ", strip=True)).lower() for c in header_row.find_all(["th", "td"])]
 
 
-def _load_cpfta_schedule():
-    """Load the local CPFTA schedule once per worker.
+def _download_cpfta_text(session):
+    """Download/cache the official CPFTA tariff schedule and return normalized text."""
+    if os.path.exists(CPFTA_TEXT_CACHE):
+        try:
+            return Path(CPFTA_TEXT_CACHE).read_text(encoding="utf-8")
+        except Exception:
+            pass
+    if not os.path.exists(CPFTA_CACHE):
+        r = session.get(CPFTA_SRO_URL, timeout=60, verify=False)
+        r.raise_for_status()
+        with open(CPFTA_CACHE, "wb") as f:
+            f.write(r.content)
+    reader = PdfReader(CPFTA_CACHE)
+    parts = []
+    for page in reader.pages:
+        try:
+            parts.append(page.extract_text() or "")
+        except Exception:
+            continue
+    text = re.sub(r"\\s+", " ", " ".join(parts)).strip()
+    try:
+        Path(CPFTA_TEXT_CACHE).write_text(text, encoding="utf-8")
+    except Exception:
+        pass
+    return text
 
-    The supplied Excel schedule is stored in GitHub as a lightweight CSV.
-    HS codes are kept as strings so leading zeroes are preserved.
-    """
-    global CPFTA_DATA_CACHE
-    if CPFTA_DATA_CACHE is not None:
-        return CPFTA_DATA_CACHE
 
-    if not os.path.exists(CPFTA_DATA_FILE):
-        raise FileNotFoundError(f"CPFTA data file not found: {CPFTA_DATA_FILE}")
+def cpfta_current_rate(hs8, session):
+    """Return the current CPFTA preferential CD rate for an 8-digit PCT.
 
-    data = {}
-    with open(CPFTA_DATA_FILE, "r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            code = re.sub(r"[^0-9]", "", str(row.get("HS Code", "")))
-            if len(code) != 8:
-                continue
-            data[code] = row
-
-    CPFTA_DATA_CACHE = data
-    return data
-
-
-def cpfta_current_rate(hs8, session=None):
-    """Return the current CPFTA preferential CD rate from the local schedule.
-
-    The supplied schedule starts with Year 1 in 2020, so calendar year 2026
-    corresponds to Year 7.  The rate is specific to the requested PCT code;
-    there is no universal CPFTA rate.
+    SRO 1640(I)/2019 contains a 15-year phase-down beginning 1-Jan-2020.
+    Year 7 therefore applies during calendar year 2026.  The function parses
+    the official FBR schedule rather than using stale TIPP concession rows.
     """
     code = re.sub(r"[^0-9]", "", hs8)[:8]
     if len(code) != 8:
         return None, None
-
     today = datetime.date.today()
+    if today < datetime.date(2020, 1, 1):
+        return None, None
     year_no = today.year - 2020 + 1
     if year_no < 1 or year_no > 15:
         return None, None
-
-    schedule = _load_cpfta_schedule()
-    row = schedule.get(code)
-    if not row:
-        return None, {"year": year_no, "raw": None, "source": "local CPFTA schedule", "found": False}
-
-    raw = row.get(f"Year {year_no}", "")
-    raw_clean = str(raw).strip()
-    if not raw_clean or raw_clean.lower() in {"no", "exemption", "exempt", "n/a"}:
-        return None, {
-            "year": year_no, "raw": raw_clean, "category": row.get("Category", ""),
-            "base_rate": row.get("Base Rate", ""), "source": "local CPFTA schedule", "found": True
-        }
-
+    text = _download_cpfta_text(session)
+    marker = re.search(r"PCT Code\\s+" + re.escape(code) + r"\\b", text, flags=re.I)
+    if not marker:
+        return None, None
+    start = marker.start()
+    nxt = re.search(r"\\bPCT Code\\s+\\d{8}\\b", text[marker.end():], flags=re.I)
+    end = marker.end() + nxt.start() if nxt else min(len(text), marker.end() + 1800)
+    row = text[start:end]
+    vals = re.findall(r"Year\\s+(\\d{1,2})\\s+([^ ]+)", row, flags=re.I)
+    table = {int(n): v for n, v in vals if int(n) <= 15}
+    raw = table.get(year_no)
+    if raw is None:
+        # Some PDF extraction layouts omit the repeated 'Year N' labels.
+        # Fall back to the ordered values following Year 1.
+        m = re.search(r"Year\\s+1\\s+", row, flags=re.I)
+        if m:
+            tail = row[m.end():]
+            tokens = re.split(r"\\s+", tail)
+            candidates = []
+            for tok in tokens:
+                if re.fullmatch(r"(?:\\d+(?:\\.\\d+)?|no)", tok, flags=re.I):
+                    candidates.append(tok)
+                    if len(candidates) >= 15:
+                        break
+            if len(candidates) >= year_no:
+                raw = candidates[year_no - 1]
+    if raw is None:
+        return None, None
+    if raw.lower() in {"no", "exemption", "exempt", "n/a"}:
+        return None, {"year": year_no, "raw": raw, "source": CPFTA_SRO_URL}
     try:
-        # CPFTA rates are applied/displayed to two decimal places.
-        # Example: 10.666667% -> 10.67%.
-        rate = round(float(raw_clean), 2) / 100.0
+        return float(raw) / 100.0, {"year": year_no, "raw": raw, "source": CPFTA_SRO_URL}
     except ValueError:
-        return None, {
-            "year": year_no, "raw": raw_clean, "category": row.get("Category", ""),
-            "base_rate": row.get("Base Rate", ""), "source": "local CPFTA schedule", "found": True
-        }
+        return None, None
 
-    return rate, {
-        "year": year_no,
-        "raw": raw_clean,
-        "category": row.get("Category", ""),
-        "base_rate": row.get("Base Rate", ""),
-        "source": "local CPFTA schedule",
-        "found": True
-    }
 
 def parse_tariff_page(html):
     soup = BeautifulSoup(html, "html.parser")
 
     rates = {"cd": 0.0, "acd": 0.0, "rd": 0.0, "st": 0.0, "ast": 0.0, "it": 0.0}
     non_core = {"concessions": [], "exemptions": [], "provincial_cess": []}
-    special_rates = {"pak_china_fta_cd": None, "income_tax_exemption_first_schedule_ii": None, "income_tax_commercial": None, "income_tax_industrial": None}
-    special_details = {"pak_china_fta_cd": None, "income_tax_exemption_first_schedule_ii": None, "income_tax_commercial": None, "income_tax_industrial": None}
+    special_rates = {"pak_china_fta_cd": None, "income_tax_exemption_first_schedule_ii": None}
+    special_details = {"pak_china_fta_cd": None, "income_tax_exemption_first_schedule_ii": None}
     validity = []
 
     tables = soup.find_all("table")
@@ -1396,6 +465,29 @@ def apply_atl_adjustment(rule, atl=True):
     out['status']='non_atl_adjusted'
     return out
 
+
+def weboc_live_income_tax(hs):
+    """Fetch live WeBOC Commercial/Industrial Section 148 rates through the
+    Cloudflare Worker. Returns a dict or None; never supplies a hard-coded rate.
+    """
+    proxy = os.environ.get("WEBOC_PROXY_URL", "").strip().rstrip("/")
+    if not proxy:
+        return None
+    code = re.sub(r"[^0-9.]", "", str(hs))
+    try:
+        r = requests.get(f"{proxy}/weboc", params={"hs": code}, timeout=45)
+        r.raise_for_status()
+        data = r.json()
+        commercial = data.get("commercial")
+        industrial = data.get("industrial")
+        if commercial is None and industrial is None:
+            return None
+        return {"commercial": commercial, "industrial": industrial,
+                "weboc_url": data.get("weboc_url"), "post_status": data.get("post_status"),
+                "source": "WeBOC Tariff & SROs"}
+    except Exception:
+        return None
+
 def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True):
     hs8, tipp_code = normalize_hs(hs)
 
@@ -1408,13 +500,13 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
         "Accept-Language": "en-US,en;q=0.9",
     })
 
-    record_id, resolution = search_tipp(session, tipp_code, prefix_code=hs8)
+    record_id, resolution = search_tipp(session, tipp_code)
     commodity_url = f"{TIPP_BASE}?id={quote_plus(str(record_id))}&r=tradeInfo%2Fview&sort=rate"
 
     response = session.get(commodity_url, timeout=30, verify=False)
     response.raise_for_status()
 
-    if not page_has_code(response.text, tipp_code, prefix_code=hs8):
+    if not page_has_code(response.text, tipp_code):
         raise RuntimeError(
             f"TIPP record {record_id} did not return the requested code {tipp_code}."
         )
@@ -1431,31 +523,15 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
             special_rates["pak_china_fta_cd"] = cpfta_rate
             special_details["pak_china_fta_cd"] = (
                 f"Current CPFTA phase-down: Year {cpfta_meta['year']} "
-                f"({cpfta_meta['raw']}%), source: supplied Pakistan-China FTA tariff-elimination schedule"
+                f"({cpfta_meta['raw']}%), source: FBR SRO 1640(I)/2019"
             )
         elif cpfta_meta is not None:
             special_rates["pak_china_fta_cd"] = None
             special_details["pak_china_fta_cd"] = "CPFTA schedule lists no preferential rate for the current year."
     except Exception as cpfta_error:
-        # Never silently fall back to an old TIPP CPFTA concession rate.
-        # The local schedule is the source of truth for the FTA checkbox.
-        special_rates["pak_china_fta_cd"] = None
-        special_details["pak_china_fta_cd"] = f"CPFTA local schedule lookup warning: {cpfta_error}"
-    # WeBOC Tariff & SROs is the source for the importer-category income-tax
-    # rates. The main WeBOC tariff table may show 12%, but the SRO section
-    # separately identifies the commercial and industrial rates.
-    weboc_it = weboc_income_tax_rates(session, hs8)
-    if weboc_it.get("commercial") is not None:
-        special_rates["income_tax_commercial"] = weboc_it["commercial"]
-        special_details["income_tax_commercial"] = weboc_it.get("commercial_detail")
-        # Commercial is the calculator default and is sourced only from WeBOC.
-        rates["it"] = weboc_it["commercial"]
-    if weboc_it.get("industrial") is not None:
-        special_rates["income_tax_industrial"] = weboc_it["industrial"]
-        special_details["income_tax_industrial"] = weboc_it.get("industrial_detail")
-    if weboc_it.get("error"):
-        special_details["income_tax_weboc_error"] = weboc_it["error"]
-
+        # Keep the TIPP result as a fallback only when the official schedule
+        # cannot be fetched; expose the limitation to the UI.
+        special_details["pak_china_fta_cd"] = (special_details.get("pak_china_fta_cd") or "") + f" | CPFTA schedule lookup warning: {cpfta_error}"
     # TIPP often does not expose the import-stage minimum value-addition tax
     # (shown by WeBOC as Additional Sales Tax / AST). The Twelfth Schedule to
     # the Sales Tax Act, 1990 provides a 3% ad-valorem rate, subject to its
@@ -1464,10 +540,19 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
     ast_rate = ast_rule["rate"]
     rates["ast"] = ast_rate
     it_rule = apply_atl_adjustment(income_tax_rule(hs8, importer_type=importer_type, schedule_part=schedule_part, atl=atl, facts=facts), atl=atl)
-    # Do not substitute TIPP's generic/base IT or an internal rule-layer rate.
-    # Commercial IT must come from the live WeBOC Tariff & SROs result.
-    if special_rates.get("income_tax_commercial") is None:
-        rates["it"] = None
+    # Live WeBOC is authoritative for the import-stage IT rate when available.
+    # Never substitute a generic rate if WeBOC cannot be reached.
+    live_it = weboc_live_income_tax(hs8)
+    if live_it:
+        selected = (importer_type or "commercial").lower()
+        live_rate = live_it.get("industrial") if selected == "industrial" else live_it.get("commercial")
+        if live_rate is not None:
+            it_rule = {"rate": float(live_rate), "category": "weboc",
+                       "rule": "WeBOC Tariff & SROs — Section 148",
+                       "note": "Live rate retrieved from WeBOC Tariff & SROs.",
+                       "part": "weboc"}
+    if it_rule.get("rate") is not None:
+        rates["it"] = it_rule["rate"]
     description = extract_commodity_info(soup, tipp_code)
 
     return {
@@ -1486,7 +571,6 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
         "special_rates": special_rates,
         "income_tax_rule": it_rule,
         "special_details": special_details,
-        "weboc_income_tax": weboc_it,
         "validity": "; ".join(validity),
         "source_url": commodity_url,
         "resolution": resolution,
@@ -1524,54 +608,23 @@ def ast_only():
 @app.route("/api/income-tax")
 def income_tax_only():
     hs=request.args.get("hs","")
-    importer_type=request.args.get("importer_type","commercial").lower()
     try:
         hs8,_=normalize_hs(hs)
-        live = weboc_income_tax_rates(WebocProxySession(), hs8)
-        selected = live.get("industrial") if importer_type == "industrial" else live.get("commercial")
-        if selected is not None:
-            return jsonify({"income_tax_rule": {
-                "rate": float(selected),
-                "category": "weboc",
-                "rule": "Live WeBOC Tariff & SROs importer-specific Income Tax rate",
-                "source": live.get("source"),
-                "weboc_url": live.get("weboc_url"),
-                "post_status": live.get("post_status"),
-                "commercial": live.get("commercial"),
-                "industrial": live.get("industrial")
-            }})
-        return jsonify({"income_tax_rule": {
-            "rate": None,
-            "category": "unknown",
-            "rule": "Live WeBOC Income Tax rate unavailable",
-            "source": live.get("source"),
-            "error": live.get("error") or live.get("proxy_error") or "No live WeBOC importer-specific rate returned"
-        }})
+        importer = request.args.get("importer_type","auto")
+        live = weboc_live_income_tax(hs8)
+        if live:
+            rate = live.get("industrial") if importer.lower() == "industrial" else live.get("commercial")
+            if rate is not None:
+                return jsonify({"income_tax_rule": {"rate": float(rate), "category":"weboc", "rule":"WeBOC Tariff & SROs — Section 148", "note":"Live rate retrieved from WeBOC Tariff & SROs.", "part":"weboc"}})
+        rule=income_tax_rule(hs8, importer_type=importer, schedule_part=request.args.get("schedule_part","auto"), atl=request.args.get("atl","1").lower() in {"1","true","yes","on"})
+        rule=apply_atl_adjustment(rule, atl=request.args.get("atl","1").lower() in {"1","true","yes","on"})
+        return jsonify({"income_tax_rule":rule})
     except Exception as error:
         return jsonify({"error":str(error)}),400
 
 @app.route("/health")
 def health():
     return jsonify({"ok": True})
-
-
-@app.route("/api/weboc-debug")
-def weboc_debug():
-    """Diagnostic-only live WeBOC session test. No rates are hard-coded."""
-    raw_hs = request.args.get("hs", "9503.0090")
-    hs8 = re.sub(r"[^0-9]", "", raw_hs)[:8]
-    if len(hs8) != 8:
-        return jsonify({"ok": False, "error": "Enter an 8-digit PCT, e.g. 9503.0090"}), 400
-    diagnostics = {"hs8": hs8, "requested_hs": raw_hs}
-    html, error = _weboc_search_once(hs8, diagnostics=diagnostics)
-    diagnostics["ok"] = bool(html)
-    diagnostics["error"] = error
-    if html:
-        parsed = _parse_weboc_it_rates(html)
-        diagnostics["parsed_income_tax"] = parsed
-    else:
-        diagnostics["parsed_income_tax"] = {"commercial": None, "industrial": None}
-    return jsonify(diagnostics)
 
 
 @app.route("/api/tariff")
