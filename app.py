@@ -14,6 +14,26 @@ import urllib3.util.connection as urllib3_connection
 urllib3_connection.allowed_gai_family = lambda: socket.AF_INET
 import urllib3
 from bs4 import BeautifulSoup
+
+WEBOC_PROXY_URL = os.getenv("WEBOC_PROXY_URL", "").strip().rstrip("/")
+
+class WebocProxySession(requests.Session):
+    """requests.Session that optionally tunnels PSW/WeBOC traffic through a proxy.
+
+    Set WEBOC_PROXY_URL to a proxy endpoint such as:
+    https://your-worker.example.workers.dev/proxy
+    The proxy must accept X-Target-URL and forward method, headers, body, cookies.
+    """
+    def request(self, method, url, **kwargs):
+        if WEBOC_PROXY_URL and (
+            "weboc.gov.pk" in url.lower() or "psw.gov.pk" in url.lower()
+        ):
+            headers = dict(kwargs.pop("headers", {}) or {})
+            headers["X-Target-URL"] = url
+            url = WEBOC_PROXY_URL
+            kwargs["headers"] = headers
+        return super().request(method, url, **kwargs)
+
 import csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
@@ -452,7 +472,7 @@ def _weboc_search_once(hs8, diagnostics=None):
     # with a URL of the form /\(S(... )\)/Shared/TariffList.aspx. Start there so
     # Render does not have to manufacture or bootstrap a WeBOC session.
     try:
-        session = requests.Session()
+        session = WebocProxySession()
         session.headers.update(browser_headers)
         discovered = _psw_weboc_links(session, browser_headers)
         diag(psw_discovered_urls=discovered[:5])
@@ -473,7 +493,7 @@ def _weboc_search_once(hs8, diagnostics=None):
     # SECONDARY: direct WeBOC bootstrap. Kept as a fallback for environments
     # where direct WeBOC is reachable but PSW's HTML hides the iframe URL.
     try:
-        session = requests.Session()
+        session = WebocProxySession()
         session.headers.update(browser_headers)
         session_url, form = discover_session_url(session, WEBOC_TARIFF_URL)
         html = post_search(session, session_url, form)
