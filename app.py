@@ -89,6 +89,7 @@ def api_500(error):
 TIPP_BASE = "https://www.tipp.gov.pk/index.php"
 
 WEBOC_TARIFF_URL = "https://www.weboc.gov.pk/Shared/TariffList.aspx"
+PSW_TARIFF_URL = "https://www.psw.gov.pk/public/utilities?service=tariff_sros"
 
 
 def _extract_category_rate(text, category):
@@ -193,97 +194,185 @@ def _get_weboc_form(session, headers):
         return None, None, str(exc)
 
 
-def _weboc_search_once(hs8, diagnostics=None):
-    """Perform one completely fresh WeBOC Tariff & SROs search.
+def _psw_weboc_links(session, headers):
+    """Discover the session-specific WeBOC TariffList URL from PSW.
 
-    WeBOC uses ASP.NET ViewState and can issue a session-specific URL.  A
-    fresh Session is therefore created for every attempt and the exact
-    hidden fields from that GET are posted back to the same form action.
-    No tariff or income-tax percentages are embedded here.
+    PSW's Tariff & SROs utility can open WeBOC in a session-specific URL.
+    When that link is present, using it preserves the same session/cookies
+    instead of guessing a session id. No tariff rates are embedded here.
     """
-    headers = {
+    links = []
+    try:
+        r = session.get(
+            PSW_TARIFF_URL,
+            timeout=(8, 20),
+            verify=False,
+            headers=headers,
+            allow_redirects=True,
+        )
+        if not r.ok:
+            return links
+        soup = BeautifulSoup(r.text, "html.parser")
+        for a in soup.find_all("a", href=True):
+            href = a.get("href", "")
+            label = clean_text(a.get_text(" ", strip=True)).lower()
+            if "tarifflist.aspx" in href.lower() or (
+                label == "open" and "tariff" in clean_text(a.parent.get_text(" ", strip=True)).lower()
+            ):
+                links.append(urljoin(r.url, href))
+        # Also inspect any embedded JS/HTML URL containing TariffList.aspx.
+        for match in re.findall(r"""https?://[^"'\\s<>]+TariffList\.aspx[^"'\\s<>]*""", r.text, re.I):
+            links.append(match.replace("&amp;", "&"))
+    except requests.RequestException:
+        pass
+    return list(dict.fromkeys(links))
+
+
+def _weboc_search_once(hs8, diagnostics=None):
+    """Query WeBOC exactly like the browser's Tariff & SROs form.
+
+    WeBOC uses ASP.NET cookieless sessions. A browser first obtains a
+    session-specific /Shared/TariffList.aspx URL, then POSTs the live
+    ViewState/EventValidation plus TariffList$txtSearch and
+    TariffList$btnSearch. We reproduce that flow with one requests.Session so
+    the session URL and cookies remain paired. No tariff or tax rates are
+    hard-coded here.
+    """
+    browser_headers = {
         "User-Agent": (
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) "
-            "AppleWebKit/605.1.15 (KHTML, like Gecko) "
-            "Version/26.5.2 Mobile/15E148 Safari/604.1"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:157.0) "
+            "Gecko/20100101 Firefox/157.0"
         ),
-        "Referer": "https://www.weboc.gov.pk/",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
         "Cache-Control": "no-cache",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "iframe",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1",
     }
-    session = requests.Session()
-    session.headers.update(headers)
+
     def diag(**kwargs):
         if diagnostics is not None:
             diagnostics.update(kwargs)
-    try:
+
+    def discover_session_url(session, bootstrap_url):
+        """GET the page and return the exact session-specific URL + form HTML."""
+        headers = dict(browser_headers)
+        headers["Referer"] = "https://www.weboc.gov.pk/"
         r = session.get(
-            WEBOC_TARIFF_URL,
-            timeout=(8, 20),
+            bootstrap_url,
+            timeout=(10, 35),
             verify=False,
+            headers=headers,
             allow_redirects=True,
         )
-        diag(get_status=r.status_code, get_url=r.url, get_content_length=len(r.text or ""))
+        diag(
+            bootstrap_status=r.status_code,
+            bootstrap_url=bootstrap_url,
+            session_url=r.url,
+            redirect_chain=[h.url + " -> " + h.headers.get("Location", "") for h in r.history],
+            cookies=session.cookies.get_dict(),
+            content_length=len(r.text or ""),
+        )
         if not r.ok:
-            diag(error_stage="GET")
-            return None, f"WeBOC GET returned HTTP {r.status_code} ({r.url})"
+            raise RuntimeError(f"WeBOC GET returned HTTP {r.status_code} ({r.url})")
 
+        # The final response URL is authoritative. If the server did not put
+        # the session id into the URL, look for a cookieless session URL in
+        # redirects or HTML before giving up.
+        candidates = [r.url]
+        for h in r.history:
+            loc = h.headers.get("Location")
+            if loc:
+                candidates.append(urljoin(h.url, loc))
+        for candidate in re.findall(
+            r"https?://www\.weboc\.gov\.pk/\(S\([^\)]+\)\)/Shared/TariffList\.aspx[^\"'\s<>]*",
+            r.text,
+            flags=re.I,
+        ):
+            candidates.append(candidate)
+
+        session_url = next(
+            (u for u in candidates if re.search(r"/\(S\([^\)]+\)\)/Shared/TariffList\.aspx", u, re.I)),
+            r.url,
+        )
         soup = BeautifulSoup(r.text, "html.parser")
         form = soup.find("form", id="form1") or soup.find("form")
         if not form:
-            diag(form_found=False, error_stage="FORM")
             title = clean_text(soup.title.get_text(" ", strip=True)) if soup.title else ""
-            return None, f"WeBOC tariff form was not found (final URL: {r.url}; title: {title[:120]})"
+            raise RuntimeError(
+                f"WeBOC tariff form was not found (final URL: {session_url}; title: {title[:120]})"
+            )
+        return session_url, form
 
-        diag(form_found=True, form_action=form.get("action") or r.url, input_count=len(form.find_all("input")))
+    def post_search(session, session_url, form):
+        # Reproduce the browser's application/x-www-form-urlencoded payload:
+        # all hidden ASP.NET state + the exact search field + Search button.
         data = {}
         for inp in form.find_all("input"):
             name = inp.get("name")
             if not name:
                 continue
             typ = (inp.get("type") or "text").lower()
-            if typ in {"hidden", "text", "search", "number"}:
+            if typ == "hidden":
                 data[name] = inp.get("value", "")
 
         search_name = "TariffList$txtSearch"
-        if search_name not in data:
+        if search_name not in {i.get("name") for i in form.find_all("input") if i.get("name")}:
             candidates = []
             for inp in form.find_all("input"):
-                ident = ((inp.get("name") or "") + " " + (inp.get("id") or "")).lower()
+                name = inp.get("name") or ""
+                ident = (name + " " + (inp.get("id") or "")).lower()
                 typ = (inp.get("type") or "text").lower()
-                if typ in {"text", "search"} and any(k in ident for k in ("hscode", "pct", "hs_code", "search", "txtsearch")):
-                    candidates.append(inp.get("name") or inp.get("id"))
+                if typ in {"text", "search"} and any(
+                    k in ident for k in ("hscode", "pct", "hs_code", "search", "txtsearch")
+                ):
+                    candidates.append(name)
             if candidates:
                 search_name = candidates[0]
-        if search_name not in data:
-            diag(error_stage="SEARCH_FIELD", search_field=None)
-            return None, "WeBOC HS search field was not found"
+
+        if not search_name:
+            raise RuntimeError("WeBOC HS search field was not found")
 
         data[search_name] = hs8[:4] + "." + hs8[4:]
-        diag(search_field=search_name, search_value=data[search_name])
-        button = form.find("input", attrs={"name": "TariffList$btnSearch"})
-        if button:
-            data["TariffList$btnSearch"] = button.get("value", "Search")
+        data["TariffList$btnSearch"] = "Search"
 
-        action = urljoin(r.url, form.get("action") or r.url)
-        diag(stage="POST", post_url=action, hidden_fields=len(data))
+        action = urljoin(session_url, form.get("action") or session_url)
+        post_headers = dict(browser_headers)
+        post_headers.update({
+            "Referer": session_url,
+            "Origin": "https://www.weboc.gov.pk",
+            "Content-Type": "application/x-www-form-urlencoded",
+        })
+        diag(
+            post_url=action,
+            search_field=search_name,
+            search_value=data[search_name],
+            viewstate_present=bool(data.get("__VIEWSTATE")),
+            eventvalidation_present=bool(data.get("__EVENTVALIDATION")),
+            post_cookie=session.cookies.get_dict(),
+        )
+
         post = session.post(
             action,
             data=data,
-            timeout=(8, 25),
+            timeout=(10, 45),
             verify=False,
-            headers={**headers, "Referer": r.url},
+            headers=post_headers,
             allow_redirects=True,
         )
-        diag(post_status=post.status_code, post_url=post.url, post_content_length=len(post.text or ""))
+        diag(
+            post_status=post.status_code,
+            post_url=post.url,
+            post_history=[h.url + " -> " + h.headers.get("Location", "") for h in post.history],
+            post_content_length=len(post.text or ""),
+        )
         if not post.ok:
-            diag(error_stage="POST")
-            return None, f"WeBOC POST returned HTTP {post.status_code} ({post.url})"
+            raise RuntimeError(f"WeBOC POST returned HTTP {post.status_code} ({post.url})")
 
-        # Do not require one particular label before parsing.  WeBOC has
-        # changed whitespace/markup around these labels, while the actual
-        # Income Tax rows are what matter.
         page_text = clean_text(BeautifulSoup(post.text, "html.parser").get_text(" ", strip=True))
         diag(
             final_page_chars=len(page_text),
@@ -293,16 +382,45 @@ def _weboc_search_once(hs8, diagnostics=None):
             has_exemptions_sros="exemptions / sros" in page_text.lower(),
         )
         if len(page_text) < 100:
-            diag(error_stage="RESULT_PAGE")
-            return None, f"WeBOC returned an unexpectedly short page ({len(page_text)} chars; {post.url})"
-        return post.text, None
-    except requests.RequestException as exc:
-        diag(error_stage="REQUEST_EXCEPTION")
-        return None, f"WeBOC connection error: {exc}"
-    except Exception as exc:
-        diag(error_stage="EXCEPTION")
-        return None, f"WeBOC parser/request error: {exc}"
+            raise RuntimeError(
+                f"WeBOC returned an unexpectedly short page ({len(page_text)} chars; {post.url})"
+            )
+        return post.text
 
+    errors = []
+
+    # Primary route: official WeBOC. This is the route corresponding to the
+    # exact cURL captured from the user's browser.
+    try:
+        session = requests.Session()
+        session.headers.update(browser_headers)
+        session_url, form = discover_session_url(session, WEBOC_TARIFF_URL)
+        html = post_search(session, session_url, form)
+        if html:
+            return html, None
+    except Exception as exc:
+        errors.append("direct: " + str(exc))
+
+    # Secondary route: PSW's Tariff & SROs utility, which can expose the
+    # current session-specific WeBOC TariffList URL. This remains a fallback;
+    # it never supplies or substitutes tax rates.
+    try:
+        session = requests.Session()
+        session.headers.update(browser_headers)
+        discovered = _psw_weboc_links(session, browser_headers)
+        diag(psw_discovered_urls=discovered[:5])
+        for url in discovered[:3]:
+            try:
+                session_url, form = discover_session_url(session, url)
+                html = post_search(session, session_url, form)
+                if html:
+                    return html, None
+            except Exception as exc:
+                errors.append("psw: " + str(exc))
+    except Exception as exc:
+        errors.append("psw bootstrap: " + str(exc))
+
+    return None, "; ".join(errors) or "WeBOC tariff page could not be queried"
 
 def _weboc_search_form(_session, hs8):
     """Try the live WeBOC tariff form twice, with independent sessions."""
