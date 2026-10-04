@@ -1,5 +1,6 @@
 Flask
 requests
-urllib3
 beautifulsoup4
+urllib3
+pypdf
 gunicorn
