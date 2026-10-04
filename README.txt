@@ -1,4 +1,7 @@
-v59: strict live WeBOC Income Tax integration.
-Uses WEBOC_PROXY_URL when set, otherwise the deployed Cloudflare Worker URL.
-No generic/statutory Income Tax fallback is used for calculator IT.
-New diagnostic endpoint: /api/weboc-debug?hs=9503.0090
+Pakistan Customs Duty Calculator v60
+
+This version fixes the Render deployment failure by including pypdf in requirements.txt.
+Start command: gunicorn app:app
+Build command: pip install -r requirements.txt
+
+Live WeBOC income-tax lookup uses WEBOC_PROXY_URL when configured.
