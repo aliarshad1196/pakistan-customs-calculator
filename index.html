@@ -5,120 +5,217 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Pakistan Customs Duty Calculator</title>
 <style>
-*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:#f4f7fb;color:#172033}
-.wrap{max-width:620px;margin:auto;padding:18px}
-.card{background:#fff;border-radius:18px;padding:20px;margin-bottom:14px;box-shadow:0 5px 20px #00000010}
-h1{font-size:24px;margin:0 0 5px}.sub{color:#667085;font-size:13px;margin-bottom:18px}
-label{display:block;font-weight:700;font-size:13px;margin:12px 0 6px}
-input{width:100%;padding:13px;border:1px solid #d0d5dd;border-radius:10px;font-size:16px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-button{width:100%;border:0;border-radius:11px;padding:14px;font-size:16px;font-weight:700;cursor:pointer;background:#175cd3;color:white;margin-top:12px}
-button.secondary{background:#eef4ff;color:#175cd3}
-.status{font-size:13px;margin-top:10px;color:#667085}
-.rates{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:12px}
-.rate{background:#f8fafc;padding:11px;border-radius:10px}.rate b{display:block;font-size:12px;color:#667085;margin-bottom:6px}.rate input{padding:9px;font-size:16px;font-weight:700}.rate small{display:block;margin-top:4px;font-size:11px}
-.result{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #eee}.total{font-size:19px;font-weight:800}
-small{color:#667085}
-@media(max-width:430px){.grid{grid-template-columns:1fr}}
+:root{--navy:#0b1f33;--blue:#1769e0;--blue2:#0f56c7;--green:#0f9d78;--bg:#f3f7fb;--card:#ffffff;--line:#e3eaf2;--muted:#66758a;--text:#172334;--soft:#f7faff;--shadow:0 12px 35px rgba(17,38,63,.08)}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:linear-gradient(180deg,#eef5fb 0,#f7f9fc 260px,#f3f6fa 100%);color:var(--text)}
+.wrap{max-width:760px;margin:auto;padding:22px 16px 44px}
+.card{background:var(--card);border:1px solid rgba(18,48,79,.07);border-radius:20px;padding:20px;margin-bottom:16px;box-shadow:var(--shadow)}
+.hero{position:relative;overflow:hidden;background:linear-gradient(135deg,#0b1f33 0%,#123b61 58%,#1769e0 100%);color:#fff;border:0;padding:25px 22px 22px;box-shadow:0 18px 45px rgba(11,31,51,.18)}
+.hero:after{content:"";position:absolute;width:180px;height:180px;border-radius:50%;right:-70px;top:-80px;background:rgba(255,255,255,.09)}
+.hero h1{position:relative;z-index:1;color:#fff;margin:0 0 7px;font-size:27px;letter-spacing:-.5px}
+.hero .sub{position:relative;z-index:1;color:rgba(255,255,255,.78);margin:0;font-size:13px}
+.hero-badge{position:relative;z-index:1;display:inline-flex;align-items:center;gap:7px;margin-top:17px;padding:7px 10px;border-radius:999px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.16);font-size:11px;font-weight:800}
+.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+h2{font-size:18px;margin:0;color:var(--navy);letter-spacing:-.2px}
+.section-note{font-size:11px;color:var(--muted);font-weight:700}
+label{display:block;font-weight:750;font-size:12px;margin:12px 0 6px;color:#344054}
+input{width:100%;padding:13px 14px;border:1px solid #d6dee8;border-radius:12px;font-size:16px;color:var(--text);background:#fff;outline:none;transition:.18s}
+input:focus{border-color:#6ea3ee;box-shadow:0 0 0 4px rgba(23,105,224,.10)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+button{width:100%;border:0;border-radius:12px;padding:14px 16px;font-size:15px;font-weight:800;cursor:pointer;background:linear-gradient(135deg,var(--blue),var(--blue2));color:#fff;margin-top:12px;box-shadow:0 8px 18px rgba(23,105,224,.20);transition:transform .15s,box-shadow .15s}
+button:hover{transform:translateY(-1px);box-shadow:0 10px 22px rgba(23,105,224,.24)}button.loading{opacity:.88;cursor:wait;transform:none!important}.spinner{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.38);border-top-color:#fff;border-radius:50%;vertical-align:-3px;margin-right:8px;animation:spin .75s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+button.secondary{background:#edf4ff;color:#1259c4;box-shadow:none;border:1px solid #d7e6fb}
+.status{font-size:12px;margin-top:9px;color:var(--muted);line-height:1.5}
+#commodity{margin-top:10px;padding:11px 12px;border-radius:12px;background:#f5f9ff;border:1px solid #e0ebfb;color:#31506f;font-size:13px}
+#commodity p{margin:0}
+.rates{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}
+.rate{background:linear-gradient(180deg,#fbfdff,#f5f8fc);padding:11px;border-radius:14px;border:1px solid var(--line)}
+.rate b{display:block;font-size:11px;color:#526277;margin-bottom:6px;letter-spacing:.2px}.rate-head{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:6px}.rate-head b{margin:0}.rate-option{display:flex;align-items:center;gap:5px;font-size:10px;font-weight:800;color:#526277;white-space:nowrap;cursor:pointer}.rate-option input{width:15px;height:15px;padding:0;margin:0;accent-color:var(--blue);flex:0 0 auto}.ast-toggle{border:1px solid #d7e2ef;background:#fff;color:#31506f;border-radius:8px;padding:4px 7px;font-size:10px;font-weight:800;cursor:pointer;box-shadow:none;margin:0}.ast-toggle:hover{transform:none;box-shadow:none}.gst-toggle{width:auto;margin:0;padding:7px 11px;border-radius:9px;font-size:11px;box-shadow:none;background:#edf4ff;color:#1259c4;border:1px solid #d7e6fb}.gst-toggle.active{background:var(--green);color:#fff;border-color:var(--green)}
+.rate input{padding:10px 9px;font-size:16px;font-weight:800;background:#fff}
+.options-card{margin-top:16px;padding-top:16px;border-top:1px solid #edf1f5}
+.option-row{display:flex;align-items:center;gap:10px;padding:11px 12px;border:1px solid var(--line);border-radius:12px;background:#fbfcfe;margin-top:10px;cursor:pointer}
+.option-row:hover{background:#f6f9fd;border-color:#cfdceb}
+.option-row input{width:17px;height:17px;padding:0;margin:0;accent-color:var(--blue);flex:0 0 auto}
+.option-text{font-size:13px;font-weight:750;color:#29384a;line-height:1.35}
+.option-info{padding:4px 12px 0;font-size:11px;color:var(--muted);line-height:1.45}
+details{border:1px solid var(--line)!important;border-radius:14px!important;padding:0!important;background:#fbfcfe!important;overflow:hidden}
+details summary{list-style:none;font-weight:800;cursor:pointer;padding:13px 14px;color:var(--navy);font-size:13px;display:flex;align-items:center;justify-content:space-between}
+details summary::-webkit-details-marker{display:none}
+details summary:after{content:"+";font-size:20px;line-height:1;color:#6c7b8f;font-weight:400}
+details[open] summary{border-bottom:1px solid var(--line);background:#f7faff}
+details[open] summary:after{content:"−"}
+.ast-body{padding:11px 12px 13px}
+.ast-help{margin:0 0 10px;padding:9px 10px;border-radius:10px;background:#eef7f4;color:#3f6358;font-size:11px;line-height:1.45}
+.check-label{display:flex;align-items:flex-start;gap:9px;font-weight:650;cursor:pointer;padding:7px 0;margin:0;color:#3c4a5b;font-size:12px;line-height:1.35}
+.check-label input{width:16px;height:16px;padding:0;margin:1px 0 0;flex:0 0 auto;accent-color:var(--green)}
+.tabs{display:flex;gap:8px;margin:0 0 14px}.tab{flex:1;border:1px solid var(--line);background:#fff;color:var(--navy);padding:11px 12px;border-radius:10px;font-weight:750;cursor:pointer}.tab.active{background:var(--navy);color:#fff}.compare-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.compare-card{border:1px solid var(--line);border-radius:12px;padding:14px;background:#fbfdff}.compare-card h3{margin:0 0 12px;color:var(--navy);font-size:15px}.difference{margin-top:14px;padding:16px;border-radius:12px;background:#eef7f4;display:flex;justify-content:space-between;align-items:center}.difference b{font-size:19px;color:var(--green)}
+.result{display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid #edf1f5;font-size:13px}.result span{color:#526277}.result b{color:#1c2d40}.total{font-size:15px;font-weight:800;padding-top:14px}.total span{color:var(--navy);font-weight:800}.total b{color:var(--green);font-size:17px}
+#nonCore{margin-top:16px!important}
+.tipp-extra{padding:13px 14px 14px;color:#3d4c5d;font-size:12px;line-height:1.5}
+.tipp-extra b{color:var(--navy)}
+.tipp-extra hr{border:0;border-top:1px solid #e8edf3;margin:10px 0}
+.tipp-validity{color:var(--muted);font-size:11px;line-height:1.5;margin-bottom:8px}
+#status{min-height:18px}
+@media(max-width:620px){.compare-grid{grid-template-columns:1fr}.tabs{flex-direction:column}.rates{grid-template-columns:1fr 1fr}.wrap{padding:14px 12px 34px}.hero h1{font-size:24px}.card{padding:17px}}
+@media(max-width:430px){.grid,.rates{grid-template-columns:1fr 1fr}.grid{gap:9px}.rates{gap:8px}.rate{padding:10px}.rate input{font-size:15px}.hero{padding:22px 18px}}
+@media(max-width:350px){.grid,.rates{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 <div class="wrap">
-<div class="card">
+<div class="tabs"><button id="tabNormal" class="tab active" onclick="switchTab('normal')">Duty Calculator</button><button id="tabDiff" class="tab" onclick="switchTab('difference')">Duty Difference Calculator</button><a href="/logout" style="display:inline-flex;align-items:center;justify-content:center;padding:0 16px;border-radius:12px;text-decoration:none;font-weight:700;color:#fff;background:#b42318;min-height:44px">Logout</a></div>
+<div id="normalView">
+<div class="card hero">
 <h1>Pakistan Customs Duty Calculator</h1>
-<div class="sub">Online TIPP tariff lookup • FY 2026–27</div>
+<div class="sub">Customs tariff rates 2026–2027</div>
+<div class="hero-badge">🇵🇰  Customs Tariff Rates</div>
 <label>HS / PCT Code</label>
-<input id="hs" inputmode="numeric" placeholder="e.g. 9503.0090">
-<button onclick="fetchTariff()">Fetch Rates (TIPP + WeBOC)</button>
+<input id="hs" inputmode="decimal" placeholder="e.g. 9503.0090">
+<button id="fetchBtn" onclick="fetchTariff()">Fetch Duty Rates</button>
 <div id="status" class="status"></div>
 <div id="commodity"></div>
-<div class="status" style="margin-top:12px">TIPP rates are loaded automatically, but you can edit any rate manually.</div>
-<div style="margin-top:14px;border:1px solid #e4e7ec;border-radius:12px;padding:12px;background:#fafafa">
-<b>Income Tax / Section 148</b>
-<label style="display:flex;align-items:center;gap:9px;font-weight:700;cursor:pointer;margin-top:12px"><input id="industrial" type="checkbox" style="width:auto" onchange="applyITMode()"> Industrial concern / undertaking</label>
-<div id="itRuleInfo" class="status">Commercial Importer is selected by default. The rate below will be fetched live from WeBOC.</div>
-</div>
-
+<div class="section-head" style="margin-top:18px;margin-bottom:0"><h2 style="font-size:15px">Duty & Tax Rates</h2></div>
 <div id="rates" class="rates"></div>
-<div id="astInfo" class="status" style="margin-top:10px"></div>
-<div id="options" style="margin-top:14px;display:none">
-<details style="margin-bottom:12px;border:1px solid #e4e7ec;border-radius:12px;padding:10px;background:#fafafa" open>
-<summary style="font-weight:800;cursor:pointer">Twelfth Schedule / AST conditions</summary>
-<div class="status" style="margin:8px 0">Leave all unchecked for the normal commercial-importer case. Select a condition only when it genuinely applies to this import; the AST rule will update automatically.</div>
-<label style="display:flex;align-items:flex-start;gap:9px;font-weight:700;cursor:pointer"><input id="manufacturerRaw" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Manufacturer: raw materials/intermediary goods for in-house consumption (not supplied in the same state)</label>
-<label style="display:flex;align-items:flex-start;gap:9px;font-weight:700;cursor:pointer"><input id="serviceProvider" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Registered service provider: goods for in-house taxable business use, not for further supply</label>
-<label style="display:flex;align-items:flex-start;gap:9px;font-weight:700;cursor:pointer"><input id="licensedOMC" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Licensed Oil Marketing Company: qualifying Chapter 27 petroleum products for sale in Pakistan</label>
-<label style="display:flex;align-items:flex-start;gap:9px;font-weight:700;cursor:pointer"><input id="thirdSchedule" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Third Schedule goods on which sales tax is paid on retail-price basis</label>
-<label style="display:flex;align-items:flex-start;gap:9px;font-weight:700;cursor:pointer"><input id="manufacturerPlant" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Manufacturer: Chapter 84/85 plant, machinery or equipment for in-house installation/use</label>
-<label style="display:flex;align-items:flex-start;gap:9px;font-weight:700;cursor:pointer"><input id="motor850" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Motor car with cylinder capacity up to 850cc</label>
-<label style="display:flex;align-items:flex-start;gap:9px;font-weight:700;cursor:pointer"><input id="goldUnworked" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Gold in un-worked condition</label>
-<label style="display:flex;align-items:flex-start;gap:9px;font-weight:700;cursor:pointer"><input id="silverUnworked" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Silver in un-worked condition</label>
-<label style="display:flex;align-items:flex-start;gap:9px;font-weight:700;cursor:pointer"><input id="coalIPP" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Coal imported exclusively/directly for supply to Independent Power Producers (IPP)</label>
-<div id="astFactStatus" class="status"></div>
+<div id="options" class="options-card" style="display:none">
+<details id="astDetails">
+<summary>Twelfth Schedule / AST conditions</summary>
+<div class="ast-body">
+<label class="check-label"><input id="manufacturerRaw" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Manufacturer: raw materials/intermediary goods for in-house consumption (not supplied in the same state)</label>
+<label class="check-label"><input id="serviceProvider" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Registered service provider: goods for in-house taxable business use, not for further supply</label>
+<label class="check-label"><input id="licensedOMC" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Licensed Oil Marketing Company: qualifying Chapter 27 petroleum products for sale in Pakistan</label>
+<label class="check-label"><input id="thirdSchedule" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Third Schedule goods on which sales tax is paid on retail-price basis</label>
+<label class="check-label"><input id="manufacturerPlant" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Manufacturer: Chapter 84/85 plant, machinery or equipment for in-house installation/use</label>
+<label class="check-label"><input id="motor850" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Motor car with cylinder capacity up to 850cc</label>
+<label class="check-label"><input id="goldUnworked" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Gold in un-worked condition</label>
+<label class="check-label"><input id="silverUnworked" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Silver in un-worked condition</label>
+<label class="check-label"><input id="coalIPP" type="checkbox" style="width:auto;margin-top:3px" onchange="refreshASTRule()"> Coal imported exclusively/directly for supply to Independent Power Producers (IPP)</label>
+</div>
 </details>
-<label style="display:flex;align-items:center;gap:9px;font-weight:700;cursor:pointer"><input id="fta" type="checkbox" style="width:auto" onchange="applyOptions()"> Apply Pak-China FTA (CD) rate</label>
-<div id="ftaInfo" class="status"></div>
-<label style="display:flex;align-items:center;gap:9px;font-weight:700;cursor:pointer"><input id="itExemption" type="checkbox" style="width:auto" onchange="applyOptions()"> Use Income Tax Exemption under First Schedule II</label>
-<div id="itInfo" class="status"></div>
 </div>
 </div>
 
 <div class="card">
-<h2>Import Details</h2>
+<div class="section-head"><h2>Import Details</h2><span class="section-note">Enter shipment values</span></div>
 <div class="grid">
-<div><label>Quantity</label><input id="qty" type="number" step="any" value="1" oninput="calc()"></div>
-<div><label>Unit Price</label><input id="price" type="number" step="any" value="0" oninput="calc()"></div>
-<div><label>Exchange Rate</label><input id="fx" type="number" step="any" value="280" oninput="calc()"></div>
+<div><label>Quantity</label><input id="qty" type="number" inputmode="decimal" step="any" value="1" oninput="calc()"></div>
+<div><label>Unit Price</label><input id="price" type="number" inputmode="decimal" step="any" value="0" oninput="calc()"></div>
+<div><label>Exchange Rate</label><input id="fx" type="number" inputmode="decimal" step="any" value="280" oninput="calc()"></div>
 </div>
 <button class="secondary" onclick="calc()">Calculate</button>
 </div>
 
 <div class="card">
-<h2>Duty & Tax Breakdown</h2>
+<div class="section-head"><h2>Duty & Tax Breakdown</h2><button id="gstToggle" class="gst-toggle" type="button" onclick="toggleGST()">Use GST</button></div>
 <div id="breakdown"><small>Enter values and fetch tariff rates.</small></div>
+</div>
+</div>
+
+</div>
+
+<div id="differenceView" style="display:none">
+<div class="card">
+<div class="section-head"><h2>Duty Difference Calculator</h2><span class="section-note">Side-by-side comparison</span></div>
+<div style="display:flex;gap:18px;flex-wrap:wrap;margin:10px 0 14px">
+<label style="display:flex;align-items:center;gap:8px;margin:0;cursor:pointer"><input id="sameHsMode" type="checkbox" checked onchange="setDifferenceMode('same')" style="width:auto"> Same HS Code</label>
+<label style="display:flex;align-items:center;gap:8px;margin:0;cursor:pointer"><input id="differentHsMode" type="checkbox" onchange="setDifferenceMode('different')" style="width:auto"> Different HS Codes</label>
+</div>
+<div id="diffHsControls" style="margin-bottom:14px">
+<label>HS / PCT Code</label>
+<div style="display:flex;gap:8px"><input id="diffSameHs" inputmode="decimal" placeholder="e.g. 9503.0090"><button id="diffSameFetch" type="button" onclick="fetchDifferenceSameHS()" style="margin-top:0;white-space:nowrap">Fetch Duty Rates</button></div>
+<div id="diffSameStatus" class="status"></div>
+</div>
+<div id="differentHsControls" style="display:none;margin-bottom:14px">
+<div class="compare-grid" style="margin:0">
+<div class="compare-card" style="padding:12px">
+<label>Left Side HS / PCT Code</label>
+<div style="display:flex;gap:8px"><input id="diffLeftHs" inputmode="decimal" placeholder="e.g. 9503.0090"><button id="diffLeftFetch" type="button" onclick="fetchDifferenceLeftHS()" style="margin-top:0;white-space:nowrap">Fetch Left Duty Rates</button></div>
+<div id="diffLeftStatus" class="status"></div>
+</div>
+<div class="compare-card" style="padding:12px">
+<label>Right Side HS / PCT Code</label>
+<div style="display:flex;gap:8px"><input id="diffRightHs" inputmode="decimal" placeholder="e.g. 8711.4010"><button id="diffRightFetch" type="button" onclick="fetchDifferenceRightHS()" style="margin-top:0;white-space:nowrap">Fetch Right Duty Rates</button></div>
+<div id="diffRightStatus" class="status"></div>
+</div>
+</div>
+</div>
+<div class="compare-grid">
+<div class="compare-card">
+<h3>Left Side</h3>
+<div id="leftRates" class="rates" style="margin-bottom:14px"><small>Fetch an HS/PCT code to load duty rates.</small></div>
+<div class="grid">
+<div><label>Quantity</label><input id="lqty" type="number" inputmode="decimal" step="any" value="1" oninput="calcDifference()"></div>
+<div><label>Unit Price</label><input id="lprice" type="number" inputmode="decimal" step="any" value="0" oninput="calcDifference()"></div>
+<div><label>Exchange Rate</label><input id="lfx" type="number" inputmode="decimal" step="any" value="280" oninput="calcDifference()"></div>
+</div>
+<div id="leftBreakdown"></div>
+</div>
+<div class="compare-card">
+<h3>Right Side</h3>
+<div id="rightRates" class="rates" style="margin-bottom:14px"><small>Fetch an HS/PCT code to load duty rates.</small></div>
+<div class="grid">
+<div><label>Quantity</label><input id="rqty" type="number" inputmode="decimal" step="any" value="1" oninput="calcDifference()"></div>
+<div><label>Unit Price</label><input id="rprice" type="number" inputmode="decimal" step="any" value="0" oninput="calcDifference()"></div>
+<div><label>Exchange Rate</label><input id="rfx" type="number" inputmode="decimal" step="any" value="280" oninput="calcDifference()"></div>
+</div>
+<div id="rightBreakdown"></div>
+</div>
+</div>
+<div class="difference"><span>Difference in Total Duties &amp; Taxes (Right − Left)</span><b id="differenceValue">Rs. 0.00</b></div>
 </div>
 </div>
 
 <script>
 const rates={cd:0,acd:0,rd:0,st:0,ast:0,it:0};
 const tippRates={cd:0,acd:0,rd:0,st:0,ast:0,it:0};
-let specialRates={pak_china_fta_cd:null,income_tax_exemption_first_schedule_ii:null};
+let specialRates={pak_china_fta_cd:null,income_tax_exemption_first_schedule_ii:null,income_tax_commercial:null,income_tax_industrial:null};
 let astSource={rate:0.03,name:'Twelfth Schedule — 3% value-addition tax',note:'3% applies by default to taxable imports; statutory exclusions may depend on importer/use facts.',status:'default'};
+let gstMode=false;
 const money=n=>Number(n||0).toLocaleString('en-PK',{maximumFractionDigits:2});
 function pct(x){return (Number(x||0)*100).toFixed(2)+'%'}
 function cleanHS(v){return String(v).replace(/[^0-9]/g,'')}
+async function readApiResponse(response){
+ const raw=await response.text();
+ let data=null;
+ try{ data=raw?JSON.parse(raw):null; }catch(e){
+   const snippet=raw.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim().slice(0,300);
+   throw new Error('Server returned a non-JSON response ('+response.status+'). '+(snippet||'No response body.'));
+ }
+ if(!response.ok) throw new Error((data&&data.error)||('Request failed ('+response.status+')'));
+ return data;
+}
 async function fetchTariff(){
  const hs=cleanHS(document.getElementById('hs').value);
  const status=document.getElementById('status');
+ const btn=document.getElementById('fetchBtn');
  if(!hs){status.textContent='Enter an HS/PCT code.';return}
- status.textContent='Fetching current TIPP tariff…';
+ if(btn){btn.disabled=true;btn.classList.add('loading');btn.innerHTML='<span class="spinner"></span>Fetching Duty Rates…';}
+ status.textContent='Fetching current duty rates…';
  try{
-   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts(),importer_type:document.getElementById('industrial').checked?'industrial':'commercial',schedule_part:'auto',atl:'1'}).toString());
-   const d=await r.json();
-   if(!r.ok) throw new Error(d.error||'Lookup failed');
+   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}).toString());
+   const d=await readApiResponse(r);
    rates.cd=Number(d.rates.cd||0); rates.acd=Number(d.rates.acd||0);
    rates.rd=Number(d.rates.rd||0); rates.st=Number(d.rates.st||0);
-   rates.ast=Number(d.rates.ast||0); rates.it=Number(d.rates.it||0);
+   rates.ast=Number(d.rates.ast||0); rates.it=(d.rates.it===null?0:Number(d.rates.it||0));
    astSource=d.ast_source||astSource;
    Object.assign(tippRates,rates);
-   window.incomeTaxRule=d.income_tax_rule||null;
-   applyITMode();
    specialRates.pak_china_fta_cd=d.special_rates?.pak_china_fta_cd ?? null;
    specialRates.income_tax_exemption_first_schedule_ii=d.special_rates?.income_tax_exemption_first_schedule_ii ?? null;
+   specialRates.income_tax_commercial=d.special_rates?.income_tax_commercial ?? null;
+   specialRates.income_tax_industrial=d.special_rates?.income_tax_industrial ?? null;
    document.getElementById('commodity').innerHTML='<p><b>'+ (d.code||hs) +'</b> — '+(d.description||'')+'</p>';
    document.getElementById('rates').innerHTML=
     [['CD','cd'],['ACD','acd'],['RD','rd'],['ST','st'],['AST','ast'],['IT','it']]
-    .map(x=>'<div class="rate"><b>'+x[0]+' Rate (%)</b><input id="rate_'+x[1]+'" type="number" min="0" step="0.01" value="'+(Number(rates[x[1]])*100)+'" oninput="syncManualRate(\''+x[1]+'\')"><small>'+ (x[1]==='ast' ? 'Editable • '+astSource.name+': '+pct(rates[x[1]]) : x[1]==='it' && window.incomeTaxRule ? 'Editable • '+window.incomeTaxRule.rule+': '+pct(rates[x[1]]) : 'Editable • TIPP: '+pct(rates[x[1]])) +'</small></div>').join('');
+    .map(x=>{
+      let extra='';
+      if(x[1]==='cd') extra='<label class="rate-option"><input id="fta" type="checkbox" onchange="applyOptions()"> FTA</label>';
+      if(x[1]==='ast') extra='<button class="ast-toggle" type="button" onclick="toggleAST()">AST ▾</button>';
+      if(x[1]==='it') extra='<label class="rate-option"><input id="incomeTaxIndustrial" type="checkbox" '+(specialRates.income_tax_industrial===null?'disabled':'')+' onchange="applyOptions()"> Industrial concern</label>';
+      return '<div class="rate"><div class="rate-head"><b>'+x[0]+' Rate (%)</b>'+extra+'</div><input id="rate_'+x[1]+'" type="number" inputmode="decimal" min="0" step="0.01" value="'+(Number(rates[x[1]])*100)+'" oninput="syncManualRate(\''+x[1]+'\')"></div>';
+    }).join('');
    document.getElementById('options').style.display='block';
-   const astNote=document.getElementById('astInfo');
-   if(astNote) astNote.innerHTML='<b>AST rule:</b> '+astSource.name+' — '+astSource.note;
-   updateITRuleInfo();
    const ftaBox=document.getElementById('fta');
-   const itBox=document.getElementById('itExemption');
    ftaBox.disabled=specialRates.pak_china_fta_cd===null;
-   itBox.disabled=specialRates.income_tax_exemption_first_schedule_ii===null;
-   document.getElementById('ftaInfo').textContent = specialRates.pak_china_fta_cd===null ? 'Current CPFTA rate is not listed for this HS code.' : ((d.special_details?.pak_china_fta_cd||'Current CPFTA phase-down rate')+' — '+pct(specialRates.pak_china_fta_cd));
-   document.getElementById('itInfo').textContent = specialRates.income_tax_exemption_first_schedule_ii===null ? 'Income Tax Exemption under First Schedule II is not listed for this HS code.' : 'TIPP Income Tax Exemption: '+pct(specialRates.income_tax_exemption_first_schedule_ii);
    applyOptions();
    const nc=d.non_core||{};
    const groups=[];
@@ -126,10 +223,12 @@ async function fetchTariff(){
    if((nc.exemptions||[]).length) groups.push('<b>Exemptions</b><br>'+nc.exemptions.join('<br>'));
    if((nc.provincial_cess||[]).length) groups.push('<b>Provincial cess</b><br>'+nc.provincial_cess.join('<br>'));
    document.getElementById('nonCoreBody').innerHTML=groups.join('<hr>');
-   document.getElementById('nonCore').style.display=groups.length?'block':'none';
-   status.textContent='TIPP tariff loaded. AST rule applied: '+(astSource.status||'default')+'. Validity: '+(d.validity||'see TIPP record');
+   document.getElementById('nonCore').style.display='block';
+   document.getElementById('tippValidity').textContent=d.validity||'';
+   status.textContent = specialRates.income_tax_commercial===null ? 'WeBOC Commercial Income Tax rate could not be retrieved for this PCT. No generic 12% rate has been substituted.' : '';
    calc();
  }catch(e){status.textContent='Error: '+e.message}
+ finally{if(btn){btn.disabled=false;btn.classList.remove('loading');btn.textContent='Fetch Duty Rates';}}
 }
 function astFacts(){
  return {
@@ -148,7 +247,6 @@ async function refreshASTRule(){
  const hs=cleanHS(document.getElementById('hs').value);
  if(!hs) return;
  const status=document.getElementById('astFactStatus');
- if(status) status.textContent='Updating AST rule…';
  try{
   const params=new URLSearchParams({hs,...astFacts()});
   const r=await fetch('/api/ast?'+params.toString());
@@ -157,33 +255,10 @@ async function refreshASTRule(){
   astSource=d.ast_source||astSource;
   setRateInput('ast',astSource.rate);
   const astInput=document.getElementById('rate_ast');
-  if(astInput) astInput.value=(Number(astSource.rate||0)*100).toString();
-  const astNote=document.getElementById('astInfo');
-  if(astNote) astNote.innerHTML='<b>AST rule:</b> '+astSource.name+' — '+astSource.note;
-  if(status) status.textContent='Applied: '+pct(astSource.rate)+' — '+astSource.name;
+  if(astInput) astInput.value=(gstMode?0:Number(astSource.rate||0)*100).toString();
   calc();
- }catch(e){ if(status) status.textContent='AST rule error: '+e.message; }
+ }catch(e){ if(status) status.textContent='Error: '+e.message; }
 }
-function updateITRuleInfo(){
- const el=document.getElementById('itRuleInfo');
- const r=window.incomeTaxRule;
- if(!el) return;
- if(!r){ el.textContent='Commercial Importer is selected by default. The rate below will be fetched live from WeBOC.'; return; }
- const c=r.commercial_rate!=null?pct(r.commercial_rate):'not returned';
- const i=r.industrial_rate!=null?pct(r.industrial_rate):'not returned';
- el.textContent='Live WeBOC rates — Commercial Importer: '+c+' | Industrial Undertaking: '+i+'.';
-}
-
-function applyITMode(){
- const r=window.incomeTaxRule;
- if(!r) return;
- const industrial=document.getElementById('industrial').checked;
- const value=industrial ? r.industrial_rate : r.commercial_rate;
- if(value!==null && value!==undefined) setRateInput('it',value);
- updateITRuleInfo();
- calc();
-}
-function refreshITRule(){ applyITMode(); }
 function syncManualRate(key){
  const el=document.getElementById('rate_'+key);
  if(el) rates[key]=Math.max(0,Number(el.value||0))/100;
@@ -196,44 +271,250 @@ function setRateInput(key,value){
 }
 function applyOptions(){
  const fta=document.getElementById('fta');
- const itBox=document.getElementById('itExemption');
  if(fta && fta.checked && specialRates.pak_china_fta_cd!==null){
    setRateInput('cd',specialRates.pak_china_fta_cd);
-   document.getElementById('ftaInfo').textContent='Applied current CPFTA rate: '+pct(specialRates.pak_china_fta_cd);
  } else if(fta && !fta.disabled){
    setRateInput('cd',tippRates.cd);
-   document.getElementById('ftaInfo').textContent='Current CPFTA rate: '+pct(specialRates.pak_china_fta_cd);
  }
- if(itBox && itBox.checked && specialRates.income_tax_exemption_first_schedule_ii!==null){
-   setRateInput('it',specialRates.income_tax_exemption_first_schedule_ii);
-   document.getElementById('itInfo').textContent='Applied Income Tax Exemption: '+pct(specialRates.income_tax_exemption_first_schedule_ii);
- } else if(itBox && !itBox.disabled){
-   setRateInput('it',window.incomeTaxRule && window.incomeTaxRule.rate!==null ? window.incomeTaxRule.rate : tippRates.it);
-   document.getElementById('itInfo').textContent=window.incomeTaxRule && window.incomeTaxRule.rate!==null ? ('Applied Section 148 rule: '+pct(window.incomeTaxRule.rate)) : 'TIPP statutory IT: '+pct(tippRates.it);
+ const itBox=document.getElementById('incomeTaxIndustrial');
+ if(itBox?.checked && specialRates.income_tax_industrial!==null){
+   setRateInput('it',specialRates.income_tax_industrial);
+ } else if(specialRates.income_tax_commercial!==null){
+   setRateInput('it',specialRates.income_tax_commercial);
+ } else {
+   setRateInput('it',0);
  }
  calc();
+}
+function toggleAST(){
+ const d=document.getElementById('astDetails');
+ if(d) d.open=!d.open;
+}
+let manualCVActive=false;
+let manualCVValue=0;
+let manualCVText='';
+function setManualCV(value){
+ // Do NOT rebuild the breakdown DOM while the user is typing. Rebuilding a
+ // number input on every keystroke moves the caret and makes digits appear
+ // reversed and Backspace unreliable (especially on iPhone).
+ manualCVActive=true;
+ manualCVText=String(value ?? '');
+ manualCVValue=manualCVText.trim()==='' ? 0 : Number(manualCVText);
+ updateBreakdownInPlace();
+}
+function updateBreakdownInPlace(){
+ const cv=manualCVActive ? manualCVValue : (Number(document.getElementById('qty')?.value||0)*Number(document.getElementById('price')?.value||0)*Number(document.getElementById('fx')?.value||0));
+ const cd=cv*rates.cd, acd=cv*rates.acd, rd=cv*rates.rd;
+ const st=(cv+cd+acd+rd)*rates.st;
+ const ast=gstMode?0:(cv+cd+acd+rd)*rates.ast;
+ const gst=gstMode?st*0.39:0;
+ const itBase=cv+cd+acd+rd+st+(gstMode?gst:ast);
+ const it=itBase*rates.it;
+ const total=cd+acd+rd+st+ast+gst+it;
+ const incidence=cv>0 ? (total/cv)*100 : 0;
+ const vals={cd,acd,rd,st,ast,gst,it,total};
+ Object.keys(vals).forEach(k=>{ const el=document.getElementById('cvv_'+k); if(el) el.textContent=money(vals[k]); });
+ const inc=document.getElementById('cvv_incidence'); if(inc) inc.textContent=incidence.toFixed(4)+'%';
+}
+
+function resetManualCV(){
+ manualCVActive=false;
+ manualCVValue=0;
+ manualCVText='';
+ calc();
+}
+function toggleGST(){
+ gstMode=!gstMode;
+ const astInput=document.getElementById('rate_ast');
+ if(astInput) astInput.value=(gstMode?0:Number(rates.ast||0)*100).toString();
+ const b=document.getElementById('gstToggle');
+ if(b){b.textContent=gstMode?'GST Applied':'Use GST';b.classList.toggle('active',gstMode);}
+ calc();
+}
+function switchTab(tab){
+ const normal=tab==='normal';
+ document.getElementById('normalView').style.display=normal?'block':'none';
+ document.getElementById('differenceView').style.display=normal?'none':'block';
+ document.getElementById('tabNormal').classList.toggle('active',normal);
+ document.getElementById('tabDiff').classList.toggle('active',!normal);
+ if(!normal) calcDifference();
+}
+let diffLeftRates={...rates};
+let diffRightRates={...rates};
+let diffSameHsCode='';
+let diffLeftHsCode='';
+let diffRightHsCode='';
+let diffLeftSpecial={pak_china_fta_cd:null,income_tax_exemption_first_schedule_ii:null,income_tax_commercial:null,income_tax_industrial:null};
+let diffRightSpecial={pak_china_fta_cd:null,income_tax_exemption_first_schedule_ii:null,income_tax_commercial:null,income_tax_industrial:null};
+function ratesForSide(prefix){
+ // The Duty Difference Calculator always uses its own editable rate stores.
+ // This is important for FTA/Commercial toggles: the displayed rate and the
+ // rate actually used in the calculation must be the same value.
+ if(document.getElementById('differenceView')?.style.display!=='none') return prefix==='l' ? diffLeftRates : diffRightRates;
+ return rates;
+}
+function sideCalculation(prefix){
+ const rr=ratesForSide(prefix);
+ const q=Number(document.getElementById(prefix+'qty').value||0);
+ const p=Number(document.getElementById(prefix+'price').value||0);
+ const fx=Number(document.getElementById(prefix+'fx').value||0);
+ const cv=q*p*fx;
+ const cd=cv*rr.cd, acd=cv*rr.acd, rd=cv*rr.rd;
+ const st=(cv+cd+acd+rd)*rr.st;
+ const ast=gstMode?0:(cv+cd+acd+rd)*rr.ast;
+ const gst=gstMode?st*0.39:0;
+ const itBase=cv+cd+acd+rd+st+(gstMode?gst:ast);
+ const it=itBase*rr.it;
+ const total=cd+acd+rd+st+ast+gst+it;
+ return {cv,cd,acd,rd,st,ast,gst,it,total,incidence:cv>0?(total/cv)*100:0};
+}
+function setDifferenceMode(mode){
+ const same=mode==='same';
+ document.getElementById('sameHsMode').checked=same;
+ document.getElementById('differentHsMode').checked=!same;
+ document.getElementById('diffHsControls').style.display=same?'block':'none';
+ document.getElementById('differentHsControls').style.display=same?'none':'block';
+ if(same){ diffLeftRates={...rates}; diffRightRates={...rates}; }
+ calcDifference();
+}
+function setFetchBusy(id,busy,text){
+ const b=document.getElementById(id); if(!b)return; b.disabled=busy; b.innerHTML=busy?'<span class="spinner"></span> Fetching…':text;
+}
+async function fetchDifferenceLeftHS(){
+ const hs=cleanHS(document.getElementById('diffLeftHs').value);
+ const st=document.getElementById('diffLeftStatus'); if(!hs){st.textContent='Enter the left-side HS/PCT code.';return;}
+ setFetchBusy('diffLeftFetch',true,'Fetch Left Duty Rates'); st.textContent='Fetching current duty rates…';
+ try{
+   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}));
+   const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
+   diffLeftRates={cd:Number(d.rates.cd||0),acd:Number(d.rates.acd||0),rd:Number(d.rates.rd||0),st:Number(d.rates.st||0),ast:Number(d.rates.ast||0),it:Number(d.rates.it||0)};
+   diffLeftSpecial={pak_china_fta_cd:d.special_rates?.pak_china_fta_cd ?? null,income_tax_exemption_first_schedule_ii:d.special_rates?.income_tax_exemption_first_schedule_ii ?? null,income_tax_commercial:d.special_rates?.income_tax_commercial ?? null,income_tax_industrial:d.special_rates?.income_tax_industrial ?? null};
+   diffLeftRates._tippCd=diffLeftRates.cd; diffLeftRates._tippIt=diffLeftRates.it; diffLeftHsCode=hs; renderDifferenceRates('l'); applyDifferenceOption('l','it');
+   st.textContent='Loaded '+(d.code||hs)+' tariff rates for left side.'; calcDifference();
+ }catch(e){st.textContent='Error: '+e.message;} finally{setFetchBusy('diffLeftFetch',false,'Fetch Left Duty Rates');}
+}
+async function fetchDifferenceSameHS(){
+ const hs=cleanHS(document.getElementById('diffSameHs').value);
+ const st=document.getElementById('diffSameStatus'); if(!hs){st.textContent='Enter an HS/PCT code.';return;}
+ setFetchBusy('diffSameFetch',true,'Fetch Duty Rates'); st.textContent='Fetching current duty rates…';
+ try{
+   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}));
+   const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
+   rates.cd=Number(d.rates.cd||0); rates.acd=Number(d.rates.acd||0); rates.rd=Number(d.rates.rd||0); rates.st=Number(d.rates.st||0); rates.ast=Number(d.rates.ast||0); rates.it=(d.rates.it===null?0:Number(d.rates.it||0));
+   Object.assign(tippRates,rates); diffLeftRates={...rates}; diffRightRates={...rates};
+   diffLeftSpecial={pak_china_fta_cd:d.special_rates?.pak_china_fta_cd ?? null,income_tax_exemption_first_schedule_ii:d.special_rates?.income_tax_exemption_first_schedule_ii ?? null,income_tax_commercial:d.special_rates?.income_tax_commercial ?? null,income_tax_industrial:d.special_rates?.income_tax_industrial ?? null};
+   diffRightSpecial={...diffLeftSpecial}; diffLeftRates._tippCd=diffLeftRates.cd; diffLeftRates._tippIt=diffLeftRates.it; diffRightRates._tippCd=diffRightRates.cd; diffRightRates._tippIt=diffRightRates.it; diffSameHsCode=hs;
+   renderDifferenceRates('l'); renderDifferenceRates('r'); applyDifferenceOption('l','it'); applyDifferenceOption('r','it');
+   st.textContent='Loaded '+(d.code||hs)+' tariff rates for both sides.'; calcDifference();
+ }catch(e){st.textContent='Error: '+e.message;} finally{setFetchBusy('diffSameFetch',false,'Fetch Duty Rates');}
+}
+async function fetchDifferenceRightHS(){
+ const hs=cleanHS(document.getElementById('diffRightHs').value);
+ const st=document.getElementById('diffRightStatus'); if(!hs){st.textContent='Enter the right-side HS/PCT code.';return;}
+ setFetchBusy('diffRightFetch',true,'Fetch Right Duty Rates'); st.textContent='Fetching current duty rates…';
+ try{
+   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}));
+   const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
+   diffRightRates={cd:Number(d.rates.cd||0),acd:Number(d.rates.acd||0),rd:Number(d.rates.rd||0),st:Number(d.rates.st||0),ast:Number(d.rates.ast||0),it:Number(d.rates.it||0)};
+   diffRightSpecial={pak_china_fta_cd:d.special_rates?.pak_china_fta_cd ?? null,income_tax_exemption_first_schedule_ii:d.special_rates?.income_tax_exemption_first_schedule_ii ?? null,income_tax_commercial:d.special_rates?.income_tax_commercial ?? null,income_tax_industrial:d.special_rates?.income_tax_industrial ?? null};
+   diffRightRates._tippCd=diffRightRates.cd; diffRightRates._tippIt=diffRightRates.it; diffRightHsCode=hs; renderDifferenceRates('r'); applyDifferenceOption('r','it');
+   st.textContent='Loaded '+(d.code||hs)+' tariff rates for right side.'; calcDifference();
+ }catch(e){st.textContent='Error: '+e.message;} finally{setFetchBusy('diffRightFetch',false,'Fetch Right Duty Rates');}
+}
+function diffRateStore(prefix){ return prefix==='l'?diffLeftRates:diffRightRates; }
+function diffSpecialStore(prefix){ return prefix==='l'?diffLeftSpecial:diffRightSpecial; }
+function renderDifferenceRates(prefix){
+ const box=document.getElementById(prefix==='l'?'leftRates':'rightRates');
+ if(!box) return;
+ const rr=diffRateStore(prefix), sp=diffSpecialStore(prefix);
+ const side=prefix==='l'?'Left':'Right';
+ const fields=[['CD','cd'],['ACD','acd'],['RD','rd'],['ST','st'],['AST','ast'],['IT','it']];
+ box.innerHTML=fields.map(x=>{
+   let extra='';
+   if(x[1]==='cd') extra='<label class="rate-option"><input id="'+prefix+'fta" type="checkbox" '+(sp.pak_china_fta_cd===null?'disabled':'')+' onchange="applyDifferenceOption(\''+prefix+'\',\'fta\')"> FTA</label>';
+   if(x[1]==='ast') extra='<button class="ast-toggle" type="button" onclick="toggleDifferenceAST(\''+prefix+'\')">AST ▾</button>';
+   if(x[1]==='it') extra='<label class="rate-option"><input id="'+prefix+'incomeTaxIndustrial" type="checkbox" '+(sp.income_tax_industrial===null?'disabled':'')+' onchange="applyDifferenceOption(\''+prefix+'\',\'it\')"> Industrial concern</label>';
+   return '<div class="rate"><div class="rate-head"><b>'+x[0]+' Rate (%)</b>'+extra+'</div><input id="'+prefix+'rate_'+x[1]+'" type="number" inputmode="decimal" min="0" step="0.01" value="'+(Number(rr[x[1]])*100)+'" oninput="syncDifferenceRate(\''+prefix+'\',\''+x[1]+'\')"></div>';
+ }).join('');
+}
+function syncDifferenceRate(prefix,key){
+ const el=document.getElementById(prefix+'rate_'+key); if(!el)return;
+ diffRateStore(prefix)[key]=Math.max(0,Number(el.value||0))/100; calcDifference();
+}
+function applyDifferenceOption(prefix,key){
+ const rr=diffRateStore(prefix), sp=diffSpecialStore(prefix);
+ if(key==='fta'){
+   const box=document.getElementById(prefix+'fta');
+   if(box?.checked && sp.pak_china_fta_cd!==null) rr.cd=Number(sp.pak_china_fta_cd);
+   else if(box && !box.disabled) rr.cd=rr._tippCd ?? rr.cd;
+   const el=document.getElementById(prefix+'rate_cd'); if(el) el.value=(rr.cd*100).toString();
+ }
+ if(key==='it'){
+   const box=document.getElementById(prefix+'incomeTaxIndustrial');
+   if(box?.checked && sp.income_tax_industrial!==null) rr.it=Number(sp.income_tax_industrial);
+   else if(sp.income_tax_commercial!==null) rr.it=Number(sp.income_tax_commercial);
+   else rr.it=0;
+   const el=document.getElementById(prefix+'rate_it'); if(el) el.value=(rr.it*100).toString();
+ }
+ calcDifference();
+}
+function toggleDifferenceAST(prefix){
+ const el=document.getElementById(prefix+'rate_ast');
+ if(!el)return;
+ const current=Number(el.value||0);
+ el.focus();
+}
+function renderSide(id,d){
+ const rows=[['Customs Value (CV)',d.cv],['CD',d.cd],['ACD',d.acd],['RD',d.rd],['ST',d.st],['AST',d.ast],...(gstMode?[['GST',d.gst]]:[]),['IT',d.it],['Total Duties & Taxes',d.total]];
+ let html='<div class="result"><span>Customs Value (CV)</span><b>'+money(d.cv)+'</b></div>';
+ html+='<div class="result"><span>Total Incidence</span><b>'+d.incidence.toFixed(4)+'%</b></div>';
+ html+=rows.slice(1).map((r,i)=>'<div class="result '+((i+1)>=7?'total':'')+'"><span>'+r[0]+'</span><b>'+money(r[1])+'</b></div>').join('');
+ document.getElementById(id).innerHTML=html;
+}
+function calcDifference(){
+ const l=sideCalculation('l'), r=sideCalculation('r');
+ renderSide('leftBreakdown',l); renderSide('rightBreakdown',r);
+ document.getElementById('differenceValue').textContent='Rs. '+money(r.total-l.total);
 }
 function calc(){
  const q=Number(document.getElementById('qty').value||0);
  const p=Number(document.getElementById('price').value||0);
  const fx=Number(document.getElementById('fx').value||0);
- const cv=q*p*fx;
+ const calculatedCv=q*p*fx;
+ const cv=manualCVActive ? manualCVValue : calculatedCv;
  const cd=cv*rates.cd, acd=cv*rates.acd, rd=cv*rates.rd;
  const effectiveIt=rates.it;
  const st=(cv+cd+acd+rd)*rates.st;
- const ast=(cv+cd+acd+rd)*rates.ast;
- const it=(cv+cd+rd+acd+ast+st)*effectiveIt;
- const total=cd+acd+rd+st+ast+it;
- const landed=cv+total;
- const rows=[['Customs Value (CV)',cv],['CD',cd],['ACD',acd],['RD',rd],['ST',st],['AST',ast],['IT',it],['Total Duties & Taxes',total],['Total Landed Value',landed]];
- document.getElementById('breakdown').innerHTML=rows.map((r,i)=>'<div class="result '+(i>=7?'total':'')+'"><span>'+r[0]+'</span><b>'+money(r[1])+'</b></div>').join('');
+ const ast=gstMode?0:(cv+cd+acd+rd)*rates.ast;
+ const gst=gstMode?st*0.39:0;
+ const itBase=cv+cd+acd+rd+st+(gstMode?gst:ast);
+ const it=itBase*effectiveIt;
+ const total=cd+acd+rd+st+ast+gst+it;
+ const incidence=cv>0 ? (total/cv)*100 : 0;
+ const rows=[['Customs Value (CV)',cv],['CD',cd],['ACD',acd],['RD',rd],['ST',st],['AST',ast],...(gstMode?[['GST',gst]]:[]),['IT',it],['Total Duties & Taxes',total]];
+ let html='<div class="result"><span>Customs Value (CV)</span><div style="display:flex;align-items:center;gap:8px;justify-content:flex-end"><input id="breakdownCV" type="text" inputmode="decimal" autocomplete="off" value="'+(manualCVActive?manualCVText:cv)+'" oninput="setManualCV(this.value)" style="width:180px;margin:0;text-align:right" title="Edit CV manually"></div></div>';
+ html+='<div class="result"><span>Total Incidence</span><b id="cvv_incidence">'+incidence.toFixed(4)+'%</b></div>';
+ html+='<div class="result"><span>CD</span><b id="cvv_cd">'+money(cd)+'</b></div>';
+ html+='<div class="result"><span>ACD</span><b id="cvv_acd">'+money(acd)+'</b></div>';
+ html+='<div class="result"><span>RD</span><b id="cvv_rd">'+money(rd)+'</b></div>';
+ html+='<div class="result"><span>ST</span><b id="cvv_st">'+money(st)+'</b></div>';
+ html+='<div class="result"><span>AST</span><b id="cvv_ast">'+money(ast)+'</b></div>';
+ if(gstMode) html+='<div class="result"><span>GST</span><b id="cvv_gst">'+money(gst)+'</b></div>';
+ html+='<div class="result"><span>IT</span><b id="cvv_it">'+money(it)+'</b></div>';
+ html+='<div class="result total"><span>Total Duties & Taxes</span><b id="cvv_total">'+money(total)+'</b></div>';
+ document.getElementById('breakdown').innerHTML=html;
+ if(document.getElementById('differenceView').style.display!=='none') calcDifference();
 }
 </script>
 
-<div id="nonCore" style="margin-top:16px;display:none;border:1px solid #ddd;border-radius:12px;padding:12px;background:#fafafa">
-<b>Additional TIPP information</b>
-<div style="font-size:13px;margin-top:6px;color:#555">Concessions/exemptions and provincial cess are informational only and <b>not automatically included</b> in CD/ACD/RD/ST/AST/IT.</div>
-<div id="nonCoreBody" style="margin-top:8px"></div>
+<div id="nonCore" style="margin-top:16px;display:none">
+<details>
+<summary>Additional Tariff Information</summary>
+<div class="tipp-extra">
+<div id="tippValidity" class="tipp-validity"></div>
+<div id="nonCoreBody"></div>
+</div>
+</details>
 </div>
 </body>
 </html>
