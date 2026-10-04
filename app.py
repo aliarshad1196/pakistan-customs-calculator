@@ -465,25 +465,28 @@ def apply_atl_adjustment(rule, atl=True):
     out['status']='non_atl_adjusted'
     return out
 
-def weboc_income_tax_rates(hs):
-    """Fetch the current Commercial/Industrial Section 148 rates from WeBOC via Cloudflare Worker.
-    No generic or hard-coded income-tax rate is substituted when WeBOC is unavailable.
-    """
-    proxy = os.getenv("WEBOC_PROXY_URL", "").strip().rstrip("/")
-    if not proxy:
-        raise RuntimeError("WEBOC_PROXY_URL is not configured")
-    endpoint = proxy + "/weboc"
-    r = requests.get(endpoint, params={"hs": hs}, timeout=45)
-    r.raise_for_status()
-    data = r.json()
-    if data.get("error"):
-        raise RuntimeError(data["error"])
-    commercial = data.get("commercial")
-    industrial = data.get("industrial")
-    if commercial is None or industrial is None:
-        raise RuntimeError("WeBOC returned no Commercial/Industrial Income Tax rates")
-    return float(commercial) / 100.0, float(industrial) / 100.0, data
 
+def weboc_live_income_tax(hs):
+    """Fetch live WeBOC Commercial/Industrial Section 148 rates through the
+    Cloudflare Worker. Returns a dict or None; never supplies a hard-coded rate.
+    """
+    proxy = os.environ.get("WEBOC_PROXY_URL", "").strip().rstrip("/")
+    if not proxy:
+        return None
+    code = re.sub(r"[^0-9.]", "", str(hs))
+    try:
+        r = requests.get(f"{proxy}/weboc", params={"hs": code}, timeout=45)
+        r.raise_for_status()
+        data = r.json()
+        commercial = data.get("commercial")
+        industrial = data.get("industrial")
+        if commercial is None and industrial is None:
+            return None
+        return {"commercial": commercial, "industrial": industrial,
+                "weboc_url": data.get("weboc_url"), "post_status": data.get("post_status"),
+                "source": "WeBOC Tariff & SROs"}
+    except Exception:
+        return None
 
 def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True):
     hs8, tipp_code = normalize_hs(hs)
@@ -536,21 +539,20 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
     ast_rule = twelfth_schedule_ast_rule(hs8, facts=facts)
     ast_rate = ast_rule["rate"]
     rates["ast"] = ast_rate
-    commercial_it, industrial_it, weboc_meta = weboc_income_tax_rates(hs8)
-    selected_it = industrial_it if importer_type == "industrial" else commercial_it
-    if not atl:
-        selected_it *= 2.0
-    rates["it"] = selected_it
-    it_rule = {
-        "rate": selected_it,
-        "category": "weboc",
-        "rule": "WeBOC Tariff & SROs — " + ("Industrial Undertaking" if importer_type == "industrial" else "Commercial Importer"),
-        "note": f"Live WeBOC rate. Commercial: {commercial_it*100:.2f}%; Industrial: {industrial_it*100:.2f}%." + (" Non-ATL 100% increase applied." if not atl else ""),
-        "part": "weboc",
-        "source": weboc_meta.get("weboc_url"),
-        "commercial_rate": commercial_it,
-        "industrial_rate": industrial_it,
-    }
+    it_rule = apply_atl_adjustment(income_tax_rule(hs8, importer_type=importer_type, schedule_part=schedule_part, atl=atl, facts=facts), atl=atl)
+    # Live WeBOC is authoritative for the import-stage IT rate when available.
+    # Never substitute a generic rate if WeBOC cannot be reached.
+    live_it = weboc_live_income_tax(hs8)
+    if live_it:
+        selected = (importer_type or "commercial").lower()
+        live_rate = live_it.get("industrial") if selected == "industrial" else live_it.get("commercial")
+        if live_rate is not None:
+            it_rule = {"rate": float(live_rate), "category": "weboc",
+                       "rule": "WeBOC Tariff & SROs — Section 148",
+                       "note": "Live rate retrieved from WeBOC Tariff & SROs.",
+                       "part": "weboc"}
+    if it_rule.get("rate") is not None:
+        rates["it"] = it_rule["rate"]
     description = extract_commodity_info(soup, tipp_code)
 
     return {
@@ -605,28 +607,20 @@ def ast_only():
 
 @app.route("/api/income-tax")
 def income_tax_only():
-    hs = request.args.get("hs", "")
-    importer = request.args.get("importer_type", "commercial").lower()
-    atl = request.args.get("atl", "1").lower() in {"1", "true", "yes", "on"}
+    hs=request.args.get("hs","")
     try:
-        hs8, _ = normalize_hs(hs)
-        commercial_it, industrial_it, meta = weboc_income_tax_rates(hs8)
-        selected = industrial_it if importer == "industrial" else commercial_it
-        if not atl:
-            selected *= 2.0
-        rule = {
-            "rate": selected,
-            "category": "weboc",
-            "rule": "WeBOC Tariff & SROs — " + ("Industrial Undertaking" if importer == "industrial" else "Commercial Importer"),
-            "note": f"Live WeBOC rate. Commercial: {commercial_it*100:.2f}%; Industrial: {industrial_it*100:.2f}%." + (" Non-ATL 100% increase applied." if not atl else ""),
-            "part": "weboc",
-            "source": meta.get("weboc_url"),
-            "commercial_rate": commercial_it,
-            "industrial_rate": industrial_it,
-        }
-        return jsonify({"income_tax_rule": rule})
+        hs8,_=normalize_hs(hs)
+        importer = request.args.get("importer_type","auto")
+        live = weboc_live_income_tax(hs8)
+        if live:
+            rate = live.get("industrial") if importer.lower() == "industrial" else live.get("commercial")
+            if rate is not None:
+                return jsonify({"income_tax_rule": {"rate": float(rate), "category":"weboc", "rule":"WeBOC Tariff & SROs — Section 148", "note":"Live rate retrieved from WeBOC Tariff & SROs.", "part":"weboc"}})
+        rule=income_tax_rule(hs8, importer_type=importer, schedule_part=request.args.get("schedule_part","auto"), atl=request.args.get("atl","1").lower() in {"1","true","yes","on"})
+        rule=apply_atl_adjustment(rule, atl=request.args.get("atl","1").lower() in {"1","true","yes","on"})
+        return jsonify({"income_tax_rule":rule})
     except Exception as error:
-        return jsonify({"error": f"WeBOC Income Tax lookup failed: {error}"}), 502
+        return jsonify({"error":str(error)}),400
 
 @app.route("/health")
 def health():
