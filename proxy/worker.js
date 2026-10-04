@@ -2,9 +2,18 @@ const PSW_URL = "https://www.psw.gov.pk/public/utilities?service=tariff_sros";
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:157.0) Gecko/20100101 Firefox/157.0";
 
 function cookieJarFromResponse(resp, jar) {
-  const lines = resp.headers.getAll ? resp.headers.getAll("Set-Cookie") : [];
+  let lines = [];
+  try {
+    if (typeof resp.headers.getSetCookie === "function") lines = resp.headers.getSetCookie();
+  } catch {}
+  if (!lines.length) {
+    try {
+      const raw = resp.headers.get("Set-Cookie");
+      if (raw) lines = raw.split(/,(?=\s*[^;,=\s]+\s*=)/);
+    } catch {}
+  }
   for (const line of lines) {
-    const first = line.split(";", 1)[0];
+    const first = line.split(";", 1)[0].trim();
     const i = first.indexOf("=");
     if (i > 0) jar[first.slice(0, i)] = first.slice(i + 1);
   }
@@ -129,8 +138,9 @@ export default {
         weboc_url: webocUrl,
         post_status: result.status,
         redirects_followed: hops,
-        preview: rates.text_preview,
-        cookie_names: Object.keys(jar)
+        cookie_names: Object.keys(jar),
+        cookie_debug: jar,
+        preview: rates.text_preview
       });
     } catch (e) {
       return Response.json({error:String(e?.message || e)}, {status:500});
