@@ -202,38 +202,85 @@ def _get_weboc_form(session, headers):
 
 
 def _psw_weboc_links(session, headers):
-    """Discover the session-specific WeBOC TariffList URL from PSW.
+    """Discover the exact session-specific WeBOC TariffList iframe URL from PSW.
 
-    PSW's Tariff & SROs utility can open WeBOC in a session-specific URL.
-    When that link is present, using it preserves the same session/cookies
-    instead of guessing a session id. No tariff rates are embedded here.
+    The browser traffic captured from PSW shows that the tariff page is loaded
+    as a cross-site iframe whose URL is already session-specific, e.g.
+    /\(S(... )\)/Shared/TariffList.aspx. We therefore search the PSW HTML and
+    embedded scripts broadly for that URL instead of trying to manufacture a
+    WeBOC session ourselves.
     """
     links = []
     try:
+        psw_headers = dict(headers)
+        psw_headers.update({
+            "Referer": "https://www.psw.gov.pk/",
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+        })
         r = session.get(
             PSW_TARIFF_URL,
-            timeout=(8, 20),
+            timeout=(5, 10),
             verify=False,
-            headers=headers,
+            headers=psw_headers,
             allow_redirects=True,
         )
         if not r.ok:
             return links
-        soup = BeautifulSoup(r.text, "html.parser")
-        for a in soup.find_all("a", href=True):
-            href = a.get("href", "")
-            label = clean_text(a.get_text(" ", strip=True)).lower()
-            if "tarifflist.aspx" in href.lower() or (
-                label == "open" and "tariff" in clean_text(a.parent.get_text(" ", strip=True)).lower()
-            ):
-                links.append(urljoin(r.url, href))
-        # Also inspect any embedded JS/HTML URL containing TariffList.aspx.
-        for match in re.findall(r"""https?://[^"'\\s<>]+TariffList\.aspx[^"'\\s<>]*""", r.text, re.I):
-            links.append(match.replace("&amp;", "&"))
+
+        text = r.text or ""
+        soup = BeautifulSoup(text, "html.parser")
+
+        # 1) Direct iframe/source attributes are the most useful case.
+        for tag in soup.find_all(True):
+            for attr in ("src", "data-src", "data-url", "data-href", "href", "value"):
+                value = tag.get(attr)
+                if not value:
+                    continue
+                decoded = (str(value)
+                           .replace("&amp;", "&")
+                           .replace("\\/", "/")
+                           .replace("\\u002F", "/")
+                           .replace("\\u003A", ":"))
+                if re.search(r"(?:www\\.)?weboc\\.gov\\.pk", decoded, re.I) and re.search(r"TariffList\\.aspx", decoded, re.I):
+                    links.append(urljoin(r.url, decoded))
+
+        # 2) Any absolute WeBOC TariffList URL in raw HTML/JS.
+        patterns = [
+            r'https?://(?:www\\.)?weboc\\.gov\\.pk/[^"\'<>\\s]*TariffList\\.aspx[^"\'<>\\s]*',
+            r'https?:\\/\\/(?:www\\.)?weboc\\.gov\\.pk\\/[^"\'<>\\s]*TariffList\\.aspx[^"\'<>\\s]*',
+            r'https?:\\u002F\\u002F(?:www\\.)?weboc\\.gov\\.pk\\u002F[^"\'<>\\s]*TariffList\\.aspx[^"\'<>\\s]*',
+            r'/(?:S\\([^)]*\\)/)?Shared/TariffList\\.aspx[^"\'<>\\s]*',
+        ]
+        for pat in patterns:
+            for match in re.findall(pat, text, flags=re.I):
+                decoded = (match.replace('\\/', '/')
+                           .replace('\\u002F', '/')
+                           .replace('\\u003A', ':')
+                           .replace('&amp;', '&'))
+                if decoded.startswith('/'):
+                    decoded = urljoin(r.url, decoded)
+                if re.search(r"weboc\\.gov\\.pk", decoded, re.I):
+                    links.append(decoded)
+
+        # 3) Sometimes the iframe URL is stored in JSON as a quoted string.
+        for m in re.finditer(r'[^"\']{0,160}TariffList\\.aspx[^"\']{0,300}', text, flags=re.I):
+            chunk = m.group(0)
+            for url in re.findall(r'https?[^"\'\\s<>]+', chunk):
+                if "weboc.gov.pk" in url.lower() and "tarifflist.aspx" in url.lower():
+                    links.append(url.replace('\\/', '/').replace('&amp;', '&'))
+
     except requests.RequestException:
         pass
-    return list(dict.fromkeys(links))
+    except Exception:
+        pass
 
+    # Prefer an already session-specific URL, because that is exactly what
+    # the browser uses for the iframe POST.
+    unique = list(dict.fromkeys(links))
+    unique.sort(key=lambda u: (0 if re.search(r"/\(S\([^)]*\)\)/Shared/TariffList\.aspx", u, re.I) else 1, len(u)))
+    return unique
 
 def _weboc_search_once(hs8, diagnostics=None):
     """Query WeBOC exactly like the browser's Tariff & SROs form.
@@ -396,8 +443,31 @@ def _weboc_search_once(hs8, diagnostics=None):
 
     errors = []
 
-    # Primary route: official WeBOC. This is the route corresponding to the
-    # exact cURL captured from the user's browser.
+    # PRIMARY: PSW -> session-specific WeBOC iframe.
+    # The user's browser capture shows PSW loading WeBOC as a cross-site iframe
+    # with a URL of the form /\(S(... )\)/Shared/TariffList.aspx. Start there so
+    # Render does not have to manufacture or bootstrap a WeBOC session.
+    try:
+        session = requests.Session()
+        session.headers.update(browser_headers)
+        discovered = _psw_weboc_links(session, browser_headers)
+        diag(psw_discovered_urls=discovered[:5])
+        for url in discovered[:5]:
+            try:
+                # If PSW already supplied the exact session URL, GET it directly.
+                # This GET establishes the ASP.NET form/ViewState for that same
+                # session, then post_search submits the PCT.
+                session_url, form = discover_session_url(session, url)
+                html = post_search(session, session_url, form)
+                if html:
+                    return html, None
+            except Exception as exc:
+                errors.append("psw->weboc: " + str(exc))
+    except Exception as exc:
+        errors.append("psw bootstrap: " + str(exc))
+
+    # SECONDARY: direct WeBOC bootstrap. Kept as a fallback for environments
+    # where direct WeBOC is reachable but PSW's HTML hides the iframe URL.
     try:
         session = requests.Session()
         session.headers.update(browser_headers)
@@ -407,25 +477,6 @@ def _weboc_search_once(hs8, diagnostics=None):
             return html, None
     except Exception as exc:
         errors.append("direct: " + str(exc))
-
-    # Secondary route: PSW's Tariff & SROs utility, which can expose the
-    # current session-specific WeBOC TariffList URL. This remains a fallback;
-    # it never supplies or substitutes tax rates.
-    try:
-        session = requests.Session()
-        session.headers.update(browser_headers)
-        discovered = _psw_weboc_links(session, browser_headers)
-        diag(psw_discovered_urls=discovered[:5])
-        for url in discovered[:3]:
-            try:
-                session_url, form = discover_session_url(session, url)
-                html = post_search(session, session_url, form)
-                if html:
-                    return html, None
-            except Exception as exc:
-                errors.append("psw: " + str(exc))
-    except Exception as exc:
-        errors.append("psw bootstrap: " + str(exc))
 
     return None, "; ".join(errors) or "WeBOC tariff page could not be queried"
 
