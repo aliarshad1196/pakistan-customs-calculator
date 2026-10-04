@@ -204,11 +204,9 @@ def _get_weboc_form(session, headers):
 def _psw_weboc_links(session, headers):
     """Discover the exact session-specific WeBOC TariffList iframe URL from PSW.
 
-    The browser traffic captured from PSW shows that the tariff page is loaded
-    as a cross-site iframe whose URL is already session-specific, e.g.
-    /\(S(... )\)/Shared/TariffList.aspx. We therefore search the PSW HTML and
-    embedded scripts broadly for that URL instead of trying to manufacture a
-    WeBOC session ourselves.
+    PSW loads the WeBOC Tariff & SRO page as a cross-site iframe. The iframe
+    URL may be present as a normal HTML attribute, escaped JavaScript string,
+    JSON value, or relative URL. Keep this discovery deliberately broad.
     """
     links = []
     try:
@@ -232,54 +230,60 @@ def _psw_weboc_links(session, headers):
         text = r.text or ""
         soup = BeautifulSoup(text, "html.parser")
 
-        # 1) Direct iframe/source attributes are the most useful case.
+        def normalize(value):
+            value = str(value)
+            return (value
+                    .replace("&amp;", "&")
+                    .replace("\\/", "/")
+                    .replace("\\u002F", "/")
+                    .replace("\\u003A", ":")
+                    .replace("\\u0026", "&"))
+
+        def add(value):
+            value = normalize(value).strip().strip('"\'')
+            if not value:
+                return
+            if re.search(r"(?:www\.)?weboc\.gov\.pk", value, re.I) and re.search(r"TariffList\.aspx", value, re.I):
+                links.append(urljoin(r.url, value))
+            elif re.match(r"^/\(S\([^)]*\)\)/Shared/TariffList\.aspx", value, re.I):
+                links.append(urljoin(r.url, value))
+
+        # HTML attributes: iframe src is the browser path we observed.
         for tag in soup.find_all(True):
             for attr in ("src", "data-src", "data-url", "data-href", "href", "value"):
                 value = tag.get(attr)
-                if not value:
-                    continue
-                decoded = (str(value)
-                           .replace("&amp;", "&")
-                           .replace("\\/", "/")
-                           .replace("\\u002F", "/")
-                           .replace("\\u003A", ":"))
-                if re.search(r"(?:www\\.)?weboc\\.gov\\.pk", decoded, re.I) and re.search(r"TariffList\\.aspx", decoded, re.I):
-                    links.append(urljoin(r.url, decoded))
+                if value:
+                    add(value)
 
-        # 2) Any absolute WeBOC TariffList URL in raw HTML/JS.
+        # Raw HTML / JavaScript / JSON. These patterns intentionally use single
+        # regex escapes; raw Python strings must contain \. rather than \\.
         patterns = [
-            r'https?://(?:www\\.)?weboc\\.gov\\.pk/[^"\'<>\\s]*TariffList\\.aspx[^"\'<>\\s]*',
-            r'https?:\\/\\/(?:www\\.)?weboc\\.gov\\.pk\\/[^"\'<>\\s]*TariffList\\.aspx[^"\'<>\\s]*',
-            r'https?:\\u002F\\u002F(?:www\\.)?weboc\\.gov\\.pk\\u002F[^"\'<>\\s]*TariffList\\.aspx[^"\'<>\\s]*',
-            r'/(?:S\\([^)]*\\)/)?Shared/TariffList\\.aspx[^"\'<>\\s]*',
+            r'https?://(?:www\.)?weboc\.gov\.pk/[^"\'<>\s]*TariffList\.aspx[^"\'<>\s]*',
+            r'https?:\\/\\/(?:www\.)?weboc\.gov\.pk\\/[^"\'<>\s]*TariffList\.aspx[^"\'<>\s]*',
+            r'https?:\\u002F\\u002F(?:www\.)?weboc\.gov\.pk\\u002F[^"\'<>\s]*TariffList\.aspx[^"\'<>\s]*',
+            r'/(?:S\([^)]*\)/)?Shared/TariffList\.aspx[^"\'<>\s]*',
         ]
         for pat in patterns:
             for match in re.findall(pat, text, flags=re.I):
-                decoded = (match.replace('\\/', '/')
-                           .replace('\\u002F', '/')
-                           .replace('\\u003A', ':')
-                           .replace('&amp;', '&'))
-                if decoded.startswith('/'):
-                    decoded = urljoin(r.url, decoded)
-                if re.search(r"weboc\\.gov\\.pk", decoded, re.I):
-                    links.append(decoded)
+                add(match)
 
-        # 3) Sometimes the iframe URL is stored in JSON as a quoted string.
-        for m in re.finditer(r'[^"\']{0,160}TariffList\\.aspx[^"\']{0,300}', text, flags=re.I):
-            chunk = m.group(0)
-            for url in re.findall(r'https?[^"\'\\s<>]+', chunk):
-                if "weboc.gov.pk" in url.lower() and "tarifflist.aspx" in url.lower():
-                    links.append(url.replace('\\/', '/').replace('&amp;', '&'))
+        # Look around every TariffList occurrence; this catches JS variables
+        # whose URL is assembled or quoted differently.
+        for m in re.finditer(r'TariffList\.aspx', text, flags=re.I):
+            chunk = text[max(0, m.start() - 500):min(len(text), m.end() + 500)]
+            for candidate in re.findall(r'https?[^"\'\s<>]+|/(?:S\([^)]*\)/)?Shared/TariffList\.aspx[^"\'\s<>]*', chunk, flags=re.I):
+                add(candidate)
 
     except requests.RequestException:
         pass
     except Exception:
         pass
 
-    # Prefer an already session-specific URL, because that is exactly what
-    # the browser uses for the iframe POST.
     unique = list(dict.fromkeys(links))
-    unique.sort(key=lambda u: (0 if re.search(r"/\(S\([^)]*\)\)/Shared/TariffList\.aspx", u, re.I) else 1, len(u)))
+    unique.sort(key=lambda u: (
+        0 if re.search(r"/\(S\([^)]*\)\)/Shared/TariffList\.aspx", u, re.I) else 1,
+        len(u)
+    ))
     return unique
 
 def _weboc_search_once(hs8, diagnostics=None):
