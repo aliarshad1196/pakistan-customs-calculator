@@ -5,6 +5,13 @@ import datetime
 from urllib.parse import quote_plus, urljoin
 from pathlib import Path
 import requests
+import socket
+import urllib3.util.connection as urllib3_connection
+
+# Render environments can prefer an unreachable IPv6 route for WeBOC. Force
+# outbound HTTPS resolution to IPv4 so the request fails/works on the reachable
+# address instead of hanging until Gunicorn kills the worker.
+urllib3_connection.allowed_gai_family = lambda: socket.AF_INET
 import urllib3
 from bs4 import BeautifulSoup
 import csv
@@ -264,7 +271,7 @@ def _weboc_search_once(hs8, diagnostics=None):
         headers["Referer"] = "https://www.weboc.gov.pk/"
         r = session.get(
             bootstrap_url,
-            timeout=(10, 35),
+            timeout=(2, 5),
             verify=False,
             headers=headers,
             allow_redirects=True,
@@ -359,7 +366,7 @@ def _weboc_search_once(hs8, diagnostics=None):
         post = session.post(
             action,
             data=data,
-            timeout=(10, 45),
+            timeout=(2, 7),
             verify=False,
             headers=post_headers,
             allow_redirects=True,
@@ -425,7 +432,7 @@ def _weboc_search_once(hs8, diagnostics=None):
 def _weboc_search_form(_session, hs8):
     """Try the live WeBOC tariff form twice, with independent sessions."""
     errors = []
-    for attempt in range(2):
+    for attempt in range(1):
         html, error = _weboc_search_once(hs8)
         if html:
             return html
