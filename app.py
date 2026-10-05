@@ -353,27 +353,53 @@ def weboc_income_tax_rates(session, hs8):
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36",
                 },
             )
-            if r.ok:
+
+            # Cloudflare/WeBOC can occasionally return an HTML/text error
+            # page even though the HTTP response is otherwise reachable.
+            # Never call r.json() blindly: that used to raise JSONDecodeError
+            # and then fall through to the slow direct WeBOC connection.
+            raw_body = r.text or ""
+            try:
                 payload = r.json()
-                if payload.get("commercial") is not None:
-                    result["commercial"] = float(payload["commercial"]) / 100.0
-                    result["commercial_detail"] = payload.get("commercial_detail")
-                if payload.get("industrial") is not None:
-                    result["industrial"] = float(payload["industrial"]) / 100.0
-                    result["industrial_detail"] = payload.get("industrial_detail")
-                if result["commercial"] is not None or result["industrial"] is not None:
-                    if result["commercial"] is None:
-                        result["error"] = "WeBOC did not return a Commercial Importer income-tax rate for this PCT"
-                    elif result["industrial"] is None:
-                        result["error"] = "WeBOC did not return an Industrial Undertaking income-tax rate for this PCT"
-                    return result
-                result["error"] = payload.get("error") or "WeBOC proxy returned no importer-category income-tax rates"
-            else:
-                result["error"] = f"WeBOC proxy returned HTTP {r.status_code}"
+            except ValueError:
+                preview = re.sub(r"\s+", " ", raw_body).strip()[:500]
+                result["error"] = (
+                    f"WeBOC proxy returned a non-JSON response (HTTP {r.status_code})"
+                    + (f": {preview}" if preview else "")
+                )
+                # Do not fall through to direct Render -> WeBOC when a proxy
+                # is configured. That route can time out and turn a valid TIPP
+                # lookup into an HTTP 500. Most importantly, no IT rate is
+                # invented when live WeBOC data is unavailable.
+                return result
+
+            if payload.get("commercial") is not None:
+                result["commercial"] = float(payload["commercial"]) / 100.0
+                result["commercial_detail"] = payload.get("commercial_detail")
+            if payload.get("industrial") is not None:
+                result["industrial"] = float(payload["industrial"]) / 100.0
+                result["industrial_detail"] = payload.get("industrial_detail")
+
+            if result["commercial"] is not None or result["industrial"] is not None:
+                if result["commercial"] is None:
+                    result["error"] = "WeBOC did not return a Commercial Importer income-tax rate for this PCT"
+                elif result["industrial"] is None:
+                    result["error"] = "WeBOC did not return an Industrial Undertaking income-tax rate for this PCT"
+                return result
+
+            result["error"] = payload.get("error") or "WeBOC proxy returned no importer-category income-tax rates"
+            return result
+
+        except requests.RequestException as exc:
+            result["error"] = f"WeBOC proxy connection error: {exc}"
+            return result
         except Exception as exc:
             result["error"] = f"WeBOC proxy error: {exc}"
+            return result
 
-    # Preserve the original direct implementation as a secondary route.
+    # Preserve the original direct implementation only when no proxy is
+    # configured. This keeps the proxy path fast and prevents Render from
+    # waiting through repeated direct WeBOC connection timeouts.
     try:
         html_result = _weboc_search_form(session, hs8)
         if isinstance(html_result, tuple):
