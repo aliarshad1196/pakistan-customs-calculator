@@ -196,7 +196,7 @@ def _get_weboc_form(session, headers):
         diag(stage="GET", requested_url=WEBOC_TARIFF_URL)
         r = session.get(
             WEBOC_TARIFF_URL,
-            timeout=(5, 12),
+            timeout=(5, 45),
             verify=False,
             headers=headers,
             allow_redirects=True,
@@ -357,7 +357,7 @@ def weboc_income_tax_rates(session, hs8):
             proxy_url = WEBOC_PROXY_URL + ("&" if "?" in WEBOC_PROXY_URL else "?") + quote_plus("hs") + "=" + quote_plus(hs8[:4] + "." + hs8[4:])
             r = session.get(
                 proxy_url,
-                timeout=(8, 45),
+                timeout=(5, 45),
                 verify=False,
                 headers={
                     "Accept": "application/json",
@@ -384,25 +384,9 @@ def weboc_income_tax_rates(session, hs8):
         except Exception as exc:
             result["error"] = f"WeBOC proxy error: {exc}"
 
-    # Preserve the original direct implementation as a secondary route.
-    try:
-        html_result = _weboc_search_form(session, hs8)
-        if isinstance(html_result, tuple):
-            html, query_error = html_result
-        else:
-            html, query_error = html_result, None
-        if html:
-            parsed = _parse_weboc_it_rates(html)
-            result.update(parsed)
-            if result.get("commercial") is None:
-                result["error"] = "WeBOC did not return a Commercial Importer income-tax rate for this PCT"
-            elif result.get("industrial") is None:
-                result["error"] = "WeBOC did not return an Industrial Undertaking income-tax rate for this PCT"
-            return result
-        if query_error:
-            result["error"] = (result.get("error") + " | " if result.get("error") else "") + query_error
-    except Exception as exc:
-        result["error"] = (result.get("error") + " | " if result.get("error") else "") + str(exc)
+    # Do NOT fall back to direct WeBOC from Render. Direct WeBOC connections can
+    # hang for minutes and kill the Gunicorn worker. The Cloudflare Worker is the
+    # only network path used for the live WeBOC lookup.
     return result
 
 

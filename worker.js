@@ -124,7 +124,7 @@ export default {
       // 2. WeBOC can rotate /(S(...))/ on POST. Each redirect is therefore
       // treated as a new live form: GET the new session URL, read fresh
       // ViewState/EventValidation, then POST the search again.
-      for (let attempt = 0; attempt < 8; attempt++) {
+      for (let attempt = 0; attempt < 4; attempt++) {
         const page = await req(url, { headers: { Referer: PSW } });
         const html = await textOf(page);
         const formAction = sessionUrlFromHtml(html) || url;
