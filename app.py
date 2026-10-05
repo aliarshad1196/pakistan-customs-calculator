@@ -96,6 +96,17 @@ WEBOC_PROXY_URL = os.environ.get(
     "WEBOC_PROXY_URL",
     "https://webo-proxy.aliarshad1196.workers.dev/weboc"
 ).strip()
+# Be tolerant of an older Render environment variable that points only to
+# the Worker root. The tariff endpoint is /weboc; without this normalization
+# the Worker returns its health text (HTTP 200) instead of JSON tariff data.
+if WEBOC_PROXY_URL:
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+        _u = urlsplit(WEBOC_PROXY_URL)
+        if _u.netloc and (_u.path in ("", "/")):
+            WEBOC_PROXY_URL = urlunsplit((_u.scheme, _u.netloc, "/weboc", _u.query, _u.fragment))
+    except Exception:
+        pass
 
 
 
@@ -353,53 +364,27 @@ def weboc_income_tax_rates(session, hs8):
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36",
                 },
             )
-
-            # Cloudflare/WeBOC can occasionally return an HTML/text error
-            # page even though the HTTP response is otherwise reachable.
-            # Never call r.json() blindly: that used to raise JSONDecodeError
-            # and then fall through to the slow direct WeBOC connection.
-            raw_body = r.text or ""
-            try:
+            if r.ok:
                 payload = r.json()
-            except ValueError:
-                preview = re.sub(r"\s+", " ", raw_body).strip()[:500]
-                result["error"] = (
-                    f"WeBOC proxy returned a non-JSON response (HTTP {r.status_code})"
-                    + (f": {preview}" if preview else "")
-                )
-                # Do not fall through to direct Render -> WeBOC when a proxy
-                # is configured. That route can time out and turn a valid TIPP
-                # lookup into an HTTP 500. Most importantly, no IT rate is
-                # invented when live WeBOC data is unavailable.
-                return result
-
-            if payload.get("commercial") is not None:
-                result["commercial"] = float(payload["commercial"]) / 100.0
-                result["commercial_detail"] = payload.get("commercial_detail")
-            if payload.get("industrial") is not None:
-                result["industrial"] = float(payload["industrial"]) / 100.0
-                result["industrial_detail"] = payload.get("industrial_detail")
-
-            if result["commercial"] is not None or result["industrial"] is not None:
-                if result["commercial"] is None:
-                    result["error"] = "WeBOC did not return a Commercial Importer income-tax rate for this PCT"
-                elif result["industrial"] is None:
-                    result["error"] = "WeBOC did not return an Industrial Undertaking income-tax rate for this PCT"
-                return result
-
-            result["error"] = payload.get("error") or "WeBOC proxy returned no importer-category income-tax rates"
-            return result
-
-        except requests.RequestException as exc:
-            result["error"] = f"WeBOC proxy connection error: {exc}"
-            return result
+                if payload.get("commercial") is not None:
+                    result["commercial"] = float(payload["commercial"]) / 100.0
+                    result["commercial_detail"] = payload.get("commercial_detail")
+                if payload.get("industrial") is not None:
+                    result["industrial"] = float(payload["industrial"]) / 100.0
+                    result["industrial_detail"] = payload.get("industrial_detail")
+                if result["commercial"] is not None or result["industrial"] is not None:
+                    if result["commercial"] is None:
+                        result["error"] = "WeBOC did not return a Commercial Importer income-tax rate for this PCT"
+                    elif result["industrial"] is None:
+                        result["error"] = "WeBOC did not return an Industrial Undertaking income-tax rate for this PCT"
+                    return result
+                result["error"] = payload.get("error") or "WeBOC proxy returned no importer-category income-tax rates"
+            else:
+                result["error"] = f"WeBOC proxy returned HTTP {r.status_code}"
         except Exception as exc:
             result["error"] = f"WeBOC proxy error: {exc}"
-            return result
 
-    # Preserve the original direct implementation only when no proxy is
-    # configured. This keeps the proxy path fast and prevents Render from
-    # waiting through repeated direct WeBOC connection timeouts.
+    # Preserve the original direct implementation as a secondary route.
     try:
         html_result = _weboc_search_form(session, hs8)
         if isinstance(html_result, tuple):
