@@ -33,13 +33,49 @@ export default {
     };
 
     const req = async (url, options = {}) => {
-      const headers = new Headers(options.headers || {});
-      headers.set('User-Agent', UA);
-      if (!headers.has('Accept')) headers.set('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8');
-      if (Object.keys(jar).length) headers.set('Cookie', cookieHeader());
-      const resp = await fetch(url, { ...options, headers, redirect: 'manual' });
-      captureCookies(resp);
-      return resp;
+      const baseHeaders = new Headers(options.headers || {});
+      baseHeaders.set('User-Agent', UA);
+      if (!baseHeaders.has('Accept')) baseHeaders.set('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8');
+      if (Object.keys(jar).length) baseHeaders.set('Cookie', cookieHeader());
+
+      // WeBOC occasionally returns Cloudflare 522 from one hostname/edge.
+      // Retry the same request against the bare host before giving up.
+      const targets = [url];
+      try {
+        const parsed = new URL(url);
+        if (parsed.hostname === 'www.weboc.gov.pk') {
+          const alt = new URL(url);
+          alt.hostname = 'weboc.gov.pk';
+          targets.push(alt.toString());
+        } else if (parsed.hostname === 'weboc.gov.pk') {
+          const alt = new URL(url);
+          alt.hostname = 'www.weboc.gov.pk';
+          targets.push(alt.toString());
+        }
+      } catch (_) {}
+
+      let lastResp = null;
+      let lastError = null;
+      for (let n = 0; n < targets.length; n++) {
+        const target = targets[n];
+        const headers = new Headers(baseHeaders);
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 10000);
+        try {
+          const resp = await fetch(target, { ...options, headers, redirect: 'manual', signal: controller.signal });
+          captureCookies(resp);
+          lastResp = resp;
+          if (resp.status !== 522 || n === targets.length - 1) return resp;
+          // 522: give the alternate hostname a chance.
+        } catch (e) {
+          lastError = e;
+          if (n === targets.length - 1) throw e;
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+      if (lastResp) return lastResp;
+      throw lastError || new Error('WeBOC request failed');
     };
 
     const absolute = (base, location) => new URL(location, base).toString();
@@ -127,6 +163,17 @@ export default {
       for (let attempt = 0; attempt < 4; attempt++) {
         const page = await req(url, { headers: { Referer: PSW } });
         const html = await textOf(page);
+        if (page.status === 522) {
+          return Response.json({
+            error: 'WeBOC origin returned HTTP 522 while opening TariffList.aspx',
+            weboc_url: url,
+            get_status: 522,
+            attempted_hostnames: ['www.weboc.gov.pk', 'weboc.gov.pk'],
+            redirects_followed: attempt,
+            preview: html.slice(0, 500),
+            cookie_names: Object.keys(jar),
+          }, { status: 502 });
+        }
         const formAction = sessionUrlFromHtml(html) || url;
         const vs = hidden(html, '__VIEWSTATE');
         const vg = hidden(html, '__VIEWSTATEGENERATOR');
@@ -155,6 +202,18 @@ export default {
           body: body.toString(),
         });
         const postHtml = await textOf(post);
+
+        if (post.status === 522) {
+          return Response.json({
+            error: 'WeBOC origin returned HTTP 522 after search POST',
+            weboc_url: formAction,
+            post_status: 522,
+            attempted_hostnames: ['www.weboc.gov.pk', 'weboc.gov.pk'],
+            redirects_followed: attempt,
+            preview: postHtml.slice(0, 500),
+            cookie_names: Object.keys(jar),
+          }, { status: 502 });
+        }
 
         if (post.status >= 300 && post.status < 400) {
           const loc = post.headers.get('Location');
@@ -189,7 +248,7 @@ export default {
 
       return Response.json({ error: 'WeBOC kept rotating the session URL after search POST', weboc_url: url, cookie_names: Object.keys(jar), cookie_debug: jar }, { status: 502 });
     } catch (e) {
-      return Response.json({ error: String(e?.message || e), cookie_names: Object.keys(jar), cookie_debug: jar }, { status: 500 });
+      return Response.json({ error: String(e?.name === 'AbortError' ? 'WeBOC request timed out after 10 seconds' : (e?.message || e)), cookie_names: Object.keys(jar), cookie_debug: jar }, { status: e?.name === 'AbortError' ? 504 : 500 });
     }
   }
 };

@@ -196,7 +196,7 @@ def _get_weboc_form(session, headers):
         diag(stage="GET", requested_url=WEBOC_TARIFF_URL)
         r = session.get(
             WEBOC_TARIFF_URL,
-            timeout=(5, 45),
+            timeout=(3, 8),
             verify=False,
             headers=headers,
             allow_redirects=True,
@@ -357,7 +357,7 @@ def weboc_income_tax_rates(session, hs8):
             proxy_url = WEBOC_PROXY_URL + ("&" if "?" in WEBOC_PROXY_URL else "?") + quote_plus("hs") + "=" + quote_plus(hs8[:4] + "." + hs8[4:])
             r = session.get(
                 proxy_url,
-                timeout=(5, 45),
+                timeout=(3, 8),
                 verify=False,
                 headers={
                     "Accept": "application/json",
