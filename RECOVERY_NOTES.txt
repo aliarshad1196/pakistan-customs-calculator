@@ -1,0 +1,21 @@
+RECOVERED CUSTOMS CALCULATOR BUILD
+
+This build was recovered from the larger password-protected project files retained in the working environment.
+
+Preserved:
+- Existing password/login protection in app.py
+- Existing large index.html/UI
+- Existing tariff/FTA data files
+- Existing Render configuration and requirements.txt
+- Existing application logic
+
+WeBOC:
+- worker.js contains the live WeBOC ASP.NET cookieless-session handling, including session rotation retry logic.
+- No Commercial or Industrial income-tax rate is hard-coded as a fallback.
+- app.py uses the Cloudflare Worker first through WEBOC_PROXY_URL and retains direct WeBOC logic as secondary fallback.
+
+Worker endpoint expected by app.py:
+https://webo-proxy.aliarshad1196.workers.dev/weboc
+
+Important:
+The exact historical version label “v58” could not be independently verified from the retained source filenames. This package is therefore described as the recovered build rather than claiming an unverifiable version number.
