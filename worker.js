@@ -149,104 +149,123 @@ export default {
     };
 
     try {
-      // 1. Open PSW and discover the current cookieless WeBOC session URL.
-      const psw = await req(PSW, { headers: { Referer: 'https://www.google.com/' } });
-      const pswHtml = await textOf(psw);
-      let url = sessionUrlFromHtml(pswHtml);
-      if (!url) {
-        return Response.json({ error: 'Could not discover WeBOC TariffList.aspx session URL', cookie_names: Object.keys(jar) }, { status: 502 });
+      // WeBOC can intermittently stall for a particular PCT. Do not let one
+      // stalled session poison the whole request: retry once with a completely
+      // fresh PSW/WeBOC session and fresh cookies/ViewState.
+      let lastTimeout = null;
+
+      for (let cycle = 0; cycle < 2; cycle++) {
+        // Fresh session for every cycle.
+        for (const k of Object.keys(jar)) delete jar[k];
+
+        try {
+          // 1. Open PSW and discover the current cookieless WeBOC session URL.
+          const psw = await req(PSW, { headers: { Referer: 'https://www.google.com/' } });
+          const pswHtml = await textOf(psw);
+          let url = sessionUrlFromHtml(pswHtml);
+          if (!url) {
+            return Response.json({ error: 'Could not discover WeBOC TariffList.aspx session URL', cookie_names: Object.keys(jar), retry_cycle: cycle + 1 }, { status: 502 });
+          }
+
+          // 2. WeBOC can rotate /(S(...))/ on POST. Each redirect is therefore
+          // treated as a new live form: GET the new session URL, read fresh
+          // ViewState/EventValidation, then POST the search again.
+          for (let attempt = 0; attempt < 4; attempt++) {
+            const page = await req(url, { headers: { Referer: PSW } });
+            const html = await textOf(page);
+            if (page.status === 522) {
+              // A 522 is retryable: abandon this session and start fresh.
+              throw Object.assign(new Error('WeBOC origin returned HTTP 522 while opening TariffList.aspx'), { code: 'WEBOC_522', weboc_url: url, preview: html.slice(0, 500), attempt });
+            }
+            const formAction = sessionUrlFromHtml(html) || url;
+            const vs = hidden(html, '__VIEWSTATE');
+            const vg = hidden(html, '__VIEWSTATEGENERATOR');
+            const ev = hidden(html, '__EVENTVALIDATION');
+            const ve = hidden(html, '__VIEWSTATEENCRYPTED');
+
+            if (!vs || !ev) {
+              return Response.json({ error: 'WeBOC form fields could not be parsed', weboc_url: url, preview: html.slice(0, 1200), cookie_names: Object.keys(jar), retry_cycle: cycle + 1 }, { status: 502 });
+            }
+
+            const body = new URLSearchParams();
+            body.set('__VIEWSTATE', vs);
+            if (vg) body.set('__VIEWSTATEGENERATOR', vg);
+            if (ve) body.set('__VIEWSTATEENCRYPTED', ve);
+            body.set('__EVENTVALIDATION', ev);
+            body.set('TariffList$txtSearch', hs);
+            body.set('TariffList$btnSearch', 'Search');
+
+            const post = await req(formAction, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                Referer: url,
+                Origin: 'https://www.weboc.gov.pk',
+              },
+              body: body.toString(),
+            });
+            const postHtml = await textOf(post);
+
+            if (post.status === 522) {
+              throw Object.assign(new Error('WeBOC origin returned HTTP 522 after search POST'), { code: 'WEBOC_522', weboc_url: formAction, preview: postHtml.slice(0, 500), attempt });
+            }
+
+            if (post.status >= 300 && post.status < 400) {
+              const loc = post.headers.get('Location');
+              if (!loc) break;
+              url = absolute(formAction, loc);
+              continue;
+            }
+
+            const rates = parseRates(postHtml);
+            if (rates.commercial !== null || rates.industrial !== null) {
+              return Response.json({ ok: true, weboc_url: url, ...rates, cookie_names: Object.keys(jar), retry_cycle: cycle + 1 });
+            }
+
+            // Some successful responses immediately contain a fresh session URL
+            // but still show the form. Retry that URL with a fresh ViewState.
+            const next = sessionUrlFromHtml(postHtml);
+            if (next && next !== url) {
+              url = next;
+              continue;
+            }
+
+            return Response.json({
+              error: 'WeBOC tariff page returned but the Income Tax rows could not be parsed',
+              weboc_url: url,
+              post_status: post.status,
+              commercial: rates.commercial,
+              industrial: rates.industrial,
+              preview: postHtml.slice(0, 3000),
+              cookie_names: Object.keys(jar),
+              retry_cycle: cycle + 1,
+            }, { status: 502 });
+          }
+
+          // Session kept rotating without yielding a tariff page. Start a fresh cycle.
+          lastTimeout = { code: 'SESSION_ROTATION', weboc_url: url };
+        } catch (e) {
+          if (e?.name === 'AbortError') {
+            lastTimeout = { code: 'TIMEOUT', message: 'WeBOC request timed out after 10 seconds' };
+            continue;
+          }
+          if (e?.code === 'WEBOC_522') {
+            lastTimeout = { code: '522', message: e.message, weboc_url: e.weboc_url, preview: e.preview };
+            continue;
+          }
+          throw e;
+        }
       }
 
-      // 2. WeBOC can rotate /(S(...))/ on POST. Each redirect is therefore
-      // treated as a new live form: GET the new session URL, read fresh
-      // ViewState/EventValidation, then POST the search again.
-      for (let attempt = 0; attempt < 4; attempt++) {
-        const page = await req(url, { headers: { Referer: PSW } });
-        const html = await textOf(page);
-        if (page.status === 522) {
-          return Response.json({
-            error: 'WeBOC origin returned HTTP 522 while opening TariffList.aspx',
-            weboc_url: url,
-            get_status: 522,
-            attempted_hostnames: ['www.weboc.gov.pk', 'weboc.gov.pk'],
-            redirects_followed: attempt,
-            preview: html.slice(0, 500),
-            cookie_names: Object.keys(jar),
-          }, { status: 502 });
-        }
-        const formAction = sessionUrlFromHtml(html) || url;
-        const vs = hidden(html, '__VIEWSTATE');
-        const vg = hidden(html, '__VIEWSTATEGENERATOR');
-        const ev = hidden(html, '__EVENTVALIDATION');
-        const ve = hidden(html, '__VIEWSTATEENCRYPTED');
-
-        if (!vs || !ev) {
-          return Response.json({ error: 'WeBOC form fields could not be parsed', weboc_url: url, preview: html.slice(0, 1200), cookie_names: Object.keys(jar) }, { status: 502 });
-        }
-
-        const body = new URLSearchParams();
-        body.set('__VIEWSTATE', vs);
-        if (vg) body.set('__VIEWSTATEGENERATOR', vg);
-        if (ve) body.set('__VIEWSTATEENCRYPTED', ve);
-        body.set('__EVENTVALIDATION', ev);
-        body.set('TariffList$txtSearch', hs);
-        body.set('TariffList$btnSearch', 'Search');
-
-        const post = await req(formAction, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            Referer: url,
-            Origin: 'https://www.weboc.gov.pk',
-          },
-          body: body.toString(),
-        });
-        const postHtml = await textOf(post);
-
-        if (post.status === 522) {
-          return Response.json({
-            error: 'WeBOC origin returned HTTP 522 after search POST',
-            weboc_url: formAction,
-            post_status: 522,
-            attempted_hostnames: ['www.weboc.gov.pk', 'weboc.gov.pk'],
-            redirects_followed: attempt,
-            preview: postHtml.slice(0, 500),
-            cookie_names: Object.keys(jar),
-          }, { status: 502 });
-        }
-
-        if (post.status >= 300 && post.status < 400) {
-          const loc = post.headers.get('Location');
-          if (!loc) break;
-          url = absolute(formAction, loc);
-          continue;
-        }
-
-        const rates = parseRates(postHtml);
-        if (rates.commercial !== null || rates.industrial !== null) {
-          return Response.json({ ok: true, weboc_url: url, ...rates, cookie_names: Object.keys(jar) });
-        }
-
-        // Some successful responses immediately contain a fresh session URL
-        // but still show the form. Retry that URL with a fresh ViewState.
-        const next = sessionUrlFromHtml(postHtml);
-        if (next && next !== url) {
-          url = next;
-          continue;
-        }
-
-        return Response.json({
-          error: 'WeBOC tariff page returned but the Income Tax rows could not be parsed',
-          weboc_url: url,
-          post_status: post.status,
-          commercial: rates.commercial,
-          industrial: rates.industrial,
-          preview: postHtml.slice(0, 3000),
-          cookie_names: Object.keys(jar),
-        }, { status: 502 });
-      }
-
-      return Response.json({ error: 'WeBOC kept rotating the session URL after search POST', weboc_url: url, cookie_names: Object.keys(jar), cookie_debug: jar }, { status: 502 });
+      return Response.json({
+        error: lastTimeout?.message || 'WeBOC lookup failed after retrying with fresh sessions',
+        hs,
+        retries: 2,
+        retry_reason: lastTimeout?.code || 'UNKNOWN',
+        weboc_url: lastTimeout?.weboc_url || null,
+        preview: lastTimeout?.preview || null,
+        cookie_names: Object.keys(jar),
+      }, { status: 504 });
     } catch (e) {
       return Response.json({ error: String(e?.name === 'AbortError' ? 'WeBOC request timed out after 10 seconds' : (e?.message || e)), cookie_names: Object.keys(jar), cookie_debug: jar }, { status: e?.name === 'AbortError' ? 504 : 500 });
     }
