@@ -858,10 +858,26 @@ def search_tipp(session, tipp_code, prefix_code=None):
     # TIPP's own commodity search is tried with both the exact 12-digit code
     # and the 8-digit PCT. This is the key fix: an 8-digit PCT is allowed to
     # resolve to any matching 12-digit commodity record.
+    # TIPP accepts hierarchical HS searches. Some 12-digit TIPP commodity
+    # codes (e.g. 851612000000) are not resolvable when the full 12 digits
+    # are sent to the current search endpoint, while the 8-, 6-, or 4-digit
+    # parent code returns the commodity/detail link. Try the hierarchy from
+    # most-specific to broader levels; every discovered detail record is still
+    # validated against the requested PCT before acceptance.
     search_codes=[tipp_code]
-    if prefix_code and prefix_code != tipp_code:
-        search_codes.append(prefix_code)
-    with ThreadPoolExecutor(max_workers=min(12, len(fields)*len(search_codes))) as pool:
+    if prefix_code:
+        prefix_digits=re.sub(r"[^0-9]", "", str(prefix_code))
+        for n in (8, 6, 4, 2):
+            if len(prefix_digits) >= n:
+                code=prefix_digits[:n]
+                if code and code not in search_codes:
+                    search_codes.append(code)
+    elif len(tipp_code) >= 8:
+        for n in (8, 6, 4, 2):
+            code=tipp_code[:n]
+            if code not in search_codes:
+                search_codes.append(code)
+    with ThreadPoolExecutor(max_workers=min(20, len(fields)*len(search_codes))) as pool:
         futures=[]
         for code in search_codes:
             for field in fields:
@@ -874,9 +890,15 @@ def search_tipp(session, tipp_code, prefix_code=None):
             except Exception:
                 pass
 
-    # Older searchProduct endpoint as a fallback.
-    with ThreadPoolExecutor(max_workers=len(fields)) as pool:
-        futures=[pool.submit(_tipp_search_one, session, f, tipp_code) for f in fields]
+    # Older searchProduct endpoint as a fallback. Use the same hierarchical
+    # codes because some TIPP versions only expose the detail link when the
+    # parent HS heading is searched.
+    product_codes=search_codes[:5]
+    with ThreadPoolExecutor(max_workers=min(20, len(fields)*len(product_codes))) as pool:
+        futures=[]
+        for code in product_codes:
+            for field in fields:
+                futures.append(pool.submit(_tipp_search_one, session, field, code))
         for f in as_completed(futures):
             try:
                 for rid in f.result():
@@ -884,17 +906,6 @@ def search_tipp(session, tipp_code, prefix_code=None):
                         candidate_ids.append(str(rid))
             except Exception:
                 pass
-
-    if prefix_code and prefix_code != tipp_code:
-        with ThreadPoolExecutor(max_workers=len(fields)) as pool:
-            futures=[pool.submit(_tipp_search_one, session, f, prefix_code) for f in fields]
-            for f in as_completed(futures):
-                try:
-                    for rid in f.result():
-                        if rid and str(rid) not in candidate_ids:
-                            candidate_ids.append(str(rid))
-                except Exception:
-                    pass
 
     # Verify a bounded number of candidates. For an 8-digit PCT, any verified
     # TIPP commodity beginning with that PCT is acceptable.

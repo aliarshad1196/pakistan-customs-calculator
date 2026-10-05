@@ -173,6 +173,19 @@ export default {
           for (let attempt = 0; attempt < 4; attempt++) {
             const page = await req(url, { headers: { Referer: PSW } });
             const html = await textOf(page);
+
+            // WeBOC can rotate the /(S(...))/ session URL even on GET.
+            // Because redirects are manual, a 302 must be followed before
+            // attempting to parse ViewState/EventValidation. Otherwise the
+            // body is only the "Object moved" page and form fields appear missing.
+            if (page.status >= 300 && page.status < 400) {
+              const loc = page.headers.get('Location');
+              if (loc) {
+                url = absolute(url, loc);
+                continue;
+              }
+            }
+
             if (page.status === 522) {
               // A 522 is retryable: abandon this session and start fresh.
               throw Object.assign(new Error('WeBOC origin returned HTTP 522 while opening TariffList.aspx'), { code: 'WEBOC_522', weboc_url: url, preview: html.slice(0, 500), attempt });
