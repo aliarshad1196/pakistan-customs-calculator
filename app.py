@@ -839,10 +839,21 @@ def parse_tariff_page(html):
                 # Some TIPP rows label the main Sales Tax simply as "ST" in
                 # Tariff/Fee Code and "Sales Tax" in Group Description; others
                 # put the full label in one field. Do not confuse it with AST.
-                if is_base_row and (code_norm in {"cd", "customsduty"} or desc_norm in {"cd", "customsduty"} or "customsduty" in desc_norm):
-                    rates["cd"] = rate
-                elif is_base_row and (code_norm in {"acd", "additionalcustomsduty"} or desc_norm in {"acd", "additionalcustomsduty"} or "additionalcustomsduty" in desc_norm):
+                # Match the more specific Additional Customs Duty label first.
+                # Otherwise "additionalcustomsduty" also contains "customsduty"
+                # and the ACD row can incorrectly overwrite CD (e.g. CD=2%).
+                if is_base_row and (
+                    code_norm in {"acd", "additionalcustomsduty"}
+                    or desc_norm in {"acd", "additionalcustomsduty"}
+                    or "additionalcustomsduty" in desc_norm
+                ):
                     rates["acd"] = rate
+                elif is_base_row and (
+                    code_norm in {"cd", "customsduty"}
+                    or desc_norm in {"cd", "customsduty"}
+                    or ("customsduty" in desc_norm and "additionalcustomsduty" not in desc_norm)
+                ):
+                    rates["cd"] = rate
                 elif is_base_row and (code_norm in {"rd", "regulatoryduty"} or desc_norm in {"rd", "regulatoryduty"} or "regulatoryduty" in desc_norm):
                     rates["rd"] = rate
                 elif is_base_row and (code_norm in {"st", "salestax"} or desc_norm in {"st", "salestax"} or ("salestax" in desc_norm and "additionalsalestax" not in desc_norm) or label_norm.startswith("stsalestax")):
