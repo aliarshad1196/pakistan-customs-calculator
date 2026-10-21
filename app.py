@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory, session, redirect, url_for
+from flask import Flask, request, jsonify, send_from_directory, send_file, session, redirect, url_for
 import re
 import os
 import datetime
@@ -922,7 +922,7 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
     record_id, resolution = search_tipp(session, tipp_code, prefix_code=hs8)
     commodity_url = f"{TIPP_BASE}?id={quote_plus(str(record_id))}&r=tradeInfo%2Fview&sort=rate"
 
-    response = session.get(commodity_url, timeout=30, verify=False)
+    response = session.get(commodity_url, timeout=(4, 8), verify=False)
     response.raise_for_status()
 
     if not page_has_code(response.text, tipp_code, prefix_code=hs8):
@@ -988,7 +988,9 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
 
 @app.route("/")
 def home():
-    return send_from_directory(".", "index.html")
+    # Resolve the HTML relative to this file, not Gunicorn's working directory.
+    index_path = Path(__file__).resolve().parent / "index.html"
+    return send_file(index_path, mimetype="text/html")
 
 
 @app.route("/api/ast")
