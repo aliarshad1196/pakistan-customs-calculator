@@ -953,12 +953,37 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
             headers={"Accept": "text/html,application/xhtml+xml", "Cache-Control": "no-cache"},
         )
         direct.raise_for_status()
-        if page_has_code(direct.text, tipp_code, prefix_code=hs8):
+        # TIPP's /site/commodity/<12-digit-code> page may render the selected
+        # commodity code in a breadcrumb while the tariff table itself is a
+        # DataTables widget. Verify against the page text first. If markup
+        # splits/omits digits in extracted text, accept only when the requested
+        # code is the exact 12-digit URL path AND the response contains a real
+        # tariff table with expected headings. parse_tariff_page then reads
+        # every tariff row present in the HTML, not only the visible page-size.
+        page_text = BeautifulSoup(direct.text, "html.parser").get_text(" ", strip=True)
+        verified = page_has_code(direct.text, tipp_code, prefix_code=hs8)
+        if not verified:
+            tables = BeautifulSoup(direct.text, "html.parser").find_all("table")
+            has_tariff_table = any(
+                ("tariff rate" in " ".join(table_headers(tbl)).lower()
+                 and "group description" in " ".join(table_headers(tbl)).lower())
+                for tbl in tables
+            )
+            requested_path_code = re.sub(r"[^0-9]", "", tipp_code)
+            response_path = re.sub(r"[^0-9]", "", direct.url.rsplit("/", 1)[-1].split("?", 1)[0])
+            # A redirect to a login/error/search page must not pass this check.
+            verified = bool(
+                len(requested_path_code) == 12
+                and response_path == requested_path_code
+                and has_tariff_table
+                and ("Tariff Information" in page_text or "Tariff" in page_text)
+            )
+        if verified:
             response = direct
             record_id = f"direct:{tipp_code}"
             resolution = "direct-commodity-url"
         else:
-            direct_error = "The direct commodity page did not contain a verifiable matching PCT/commodity code."
+            direct_error = "The direct commodity page did not contain a verifiable matching code and tariff table."
     except requests.RequestException as exc:
         direct_error = f"Direct TIPP commodity request failed: {exc.__class__.__name__}."
 
