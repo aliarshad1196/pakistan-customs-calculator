@@ -755,7 +755,13 @@ def parse_tariff_page(html):
         header_text = " | ".join(headers)
 
         # Only the actual tariff table is allowed to populate core rates.
-        if "duty" in header_text and "tariff rate" in header_text:
+        is_standard_tariff_table = "duty" in header_text and "tariff rate" in header_text
+        is_tipp_commodity_table = (
+            ("tariff/fee code" in header_text or "tariff fee code" in header_text)
+            and "group description" in header_text
+            and "rate" in header_text
+        )
+        if is_standard_tariff_table or is_tipp_commodity_table:
             for row in table.find_all("tr")[1:]:
                 cells = [clean_text(c.get_text(" ", strip=True)) for c in row.find_all(["th", "td"])]
                 if len(cells) < 3:
@@ -937,64 +943,61 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
         "Accept-Language": "en-US,en;q=0.9",
     })
 
-    # Primary lookup: TIPP's public canonical commodity URL. A dotted 8-digit
-    # PCT (9503.0090) is normalized to 95030090 by normalize_hs(), then to the
-    # 12-digit commodity candidate 950300900000. This avoids expensive ID
-    # discovery and external search-engine fallbacks.
+    # Direct-only lookup: construct the canonical TIPP commodity URL from the
+    # normalized 12-digit code. Do not consult a local record index or discover
+    # a separate record ID. TIPP's live page may render the code in a breadcrumb
+    # and use DataTables headers such as "Tariff/Fee Code" and "Rate".
     commodity_url = f"https://www.tipp.gov.pk/site/commodity/{tipp_code}"
-    response = None
-    direct_error = None
     try:
-        direct = session.get(
+        response = session.get(
             commodity_url,
-            timeout=(3.5, 7),
+            timeout=(4, 12),
             verify=False,
             allow_redirects=True,
-            headers={"Accept": "text/html,application/xhtml+xml", "Cache-Control": "no-cache"},
+            headers={
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Cache-Control": "no-cache",
+            },
         )
-        direct.raise_for_status()
-        # TIPP's /site/commodity/<12-digit-code> page may render the selected
-        # commodity code in a breadcrumb while the tariff table itself is a
-        # DataTables widget. Verify against the page text first. If markup
-        # splits/omits digits in extracted text, accept only when the requested
-        # code is the exact 12-digit URL path AND the response contains a real
-        # tariff table with expected headings. parse_tariff_page then reads
-        # every tariff row present in the HTML, not only the visible page-size.
-        page_text = BeautifulSoup(direct.text, "html.parser").get_text(" ", strip=True)
-        verified = page_has_code(direct.text, tipp_code, prefix_code=hs8)
-        if not verified:
-            tables = BeautifulSoup(direct.text, "html.parser").find_all("table")
-            has_tariff_table = any(
-                ("tariff rate" in " ".join(table_headers(tbl)).lower()
-                 and "group description" in " ".join(table_headers(tbl)).lower())
-                for tbl in tables
-            )
-            requested_path_code = re.sub(r"[^0-9]", "", tipp_code)
-            response_path = re.sub(r"[^0-9]", "", direct.url.rsplit("/", 1)[-1].split("?", 1)[0])
-            # A redirect to a login/error/search page must not pass this check.
-            verified = bool(
-                len(requested_path_code) == 12
-                and response_path == requested_path_code
-                and has_tariff_table
-                and ("Tariff Information" in page_text or "Tariff" in page_text)
-            )
-        if verified:
-            response = direct
-            record_id = f"direct:{tipp_code}"
-            resolution = "direct-commodity-url"
-        else:
-            direct_error = "The direct commodity page did not contain a verifiable matching code and tariff table."
+        response.raise_for_status()
     except requests.RequestException as exc:
-        direct_error = f"Direct TIPP commodity request failed: {exc.__class__.__name__}."
-
-    # Deliberately do not launch the old many-request resolver on a direct
-    # endpoint failure: it caused long waits and ended with the same error.
-    # The failure is explicit so we can diagnose the direct page response.
-    if response is None:
         raise RuntimeError(
-            f"TIPP direct lookup failed for {tipp_code} (PCT {hs8}). {direct_error or 'No verifiable response.'} "
-            f"Requested URL: {commodity_url}"
+            f"TIPP direct request failed for {tipp_code} (PCT {hs8}): "
+            f"{exc.__class__.__name__}. URL: {commodity_url}"
+        ) from exc
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    tables = soup.find_all("table")
+    tariff_table_found = False
+    for table in tables:
+        header_text = " ".join(table_headers(table)).lower()
+        # The actual TIPP page in the user's screenshot labels its columns
+        # Tariff/Fee Code, Group Description, Activity, Rate, Unit, Valid From.
+        if ("rate" in header_text and
+            ("tariff/fee code" in header_text or "tariff fee code" in header_text or
+             ("group description" in header_text and "activity" in header_text))):
+            tariff_table_found = True
+            break
+
+    # The direct endpoint itself is keyed by the requested commodity code.
+    # Some TIPP page layouts expose the code only in a breadcrumb/JS data, so
+    # do not reject a valid tariff table solely because BeautifulSoup's plain
+    # text extraction omits or reformats the code.
+    response_path = requests.utils.urlparse(response.url).path.rstrip("/")
+    expected_path = f"/site/commodity/{tipp_code}".rstrip("/")
+    if not tariff_table_found:
+        raise RuntimeError(
+            f"TIPP direct page returned for {tipp_code}, but no tariff table was found. "
+            f"URL: {commodity_url}; final URL: {response.url}; HTTP {response.status_code}."
         )
+    if response_path != expected_path and not page_has_code(response.text, tipp_code, prefix_code=hs8):
+        raise RuntimeError(
+            f"TIPP redirected the direct commodity request to an unverified page. "
+            f"Requested: {commodity_url}; final URL: {response.url}."
+        )
+
+    record_id = f"direct:{tipp_code}"
+    resolution = "direct-commodity-url"
 
     soup = BeautifulSoup(response.text, "html.parser")
     rates, non_core, validity, special_rates, special_details = parse_tariff_page(response.text)
