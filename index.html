@@ -217,9 +217,11 @@ async function fetchTariff(){
    applyOptions();
    const nc=d.non_core||{};
    const groups=[];
-   if((nc.concessions||[]).length) groups.push('<b>Concessions</b><br>'+nc.concessions.join('<br>'));
-   if((nc.exemptions||[]).length) groups.push('<b>Exemptions</b><br>'+nc.exemptions.join('<br>'));
-   if((nc.provincial_cess||[]).length) groups.push('<b>Provincial cess</b><br>'+nc.provincial_cess.join('<br>'));
+   const esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&#39;');
+   if((nc.tariff_rows||[]).length) groups.push('<b>All TIPP tariff rows</b><br>'+nc.tariff_rows.map(esc).join('<br>'));
+   if((nc.concessions||[]).length) groups.push('<b>Concessions</b><br>'+nc.concessions.map(esc).join('<br>'));
+   if((nc.exemptions||[]).length) groups.push('<b>Exemptions</b><br>'+nc.exemptions.map(esc).join('<br>'));
+   if((nc.provincial_cess||[]).length) groups.push('<b>Provincial cess</b><br>'+nc.provincial_cess.map(esc).join('<br>'));
    document.getElementById('nonCoreBody').innerHTML=groups.join('<hr>');
    document.getElementById('nonCore').style.display='block';
    document.getElementById('tippValidity').textContent=d.validity||'';

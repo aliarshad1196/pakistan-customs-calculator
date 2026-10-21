@@ -740,50 +740,138 @@ def cpfta_current_rate(hs8, session=None):
     }
 
 def parse_tariff_page(html):
+    """Parse TIPP's direct commodity page.
+
+    TIPP's live commodity table uses columns such as Tariff/Fee Code,
+    Group Description, Activity, Rate, Unit, Valid From and Valid To. In that
+    layout the rate is in column 4, not column 1. Preserve every row in the
+    Additional Tariff Information payload, while only mapping exact core
+    tariff codes into the six main rate inputs.
+    """
     soup = BeautifulSoup(html, "html.parser")
 
     rates = {"cd": 0.0, "acd": 0.0, "rd": 0.0, "st": 0.0, "ast": 0.0, "it": 0.0}
-    non_core = {"concessions": [], "exemptions": [], "provincial_cess": []}
+    non_core = {"concessions": [], "exemptions": [], "provincial_cess": [], "tariff_rows": []}
     special_rates = {"pak_china_fta_cd": None, "income_tax_exemption_first_schedule_ii": None}
     special_details = {"pak_china_fta_cd": None, "income_tax_exemption_first_schedule_ii": None}
     validity = []
 
-    tables = soup.find_all("table")
+    def pct(cell):
+        """Parse a rate cell, including TIPP values that omit the % sign.
 
-    for table in tables:
+        The TIPP table's Rate column may contain `20`, `18.00`, or `20%`.
+        Since this helper is only called on the isolated Rate column, a plain
+        numeric value is safely interpreted as a percentage rather than 20.0.
+        """
+        value = clean_text(str(cell or "")).replace(",", "")
+        explicit = parse_rate(value)
+        if explicit:
+            return explicit
+        match = re.fullmatch(r"\s*(-?\d+(?:\.\d+)?)\s*%?\s*", value)
+        if match:
+            try:
+                number = float(match.group(1))
+                if 0 <= number <= 100:
+                    return number / 100.0
+            except ValueError:
+                pass
+        return 0.0
+
+    def normalize_label(value):
+        return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
+
+    for table in soup.find_all("table"):
         headers = table_headers(table)
-        header_text = " | ".join(headers)
-
-        # Only the actual tariff table is allowed to populate core rates.
-        is_standard_tariff_table = "duty" in header_text and "tariff rate" in header_text
+        header_text = " | ".join(headers).lower()
         is_tipp_commodity_table = (
             ("tariff/fee code" in header_text or "tariff fee code" in header_text)
-            and "group description" in header_text
-            and "rate" in header_text
+            and "group description" in header_text and "rate" in header_text
         )
-        if is_standard_tariff_table or is_tipp_commodity_table:
+        is_standard_tariff_table = "duty" in header_text and "tariff rate" in header_text
+
+        if is_tipp_commodity_table:
+            # Derive indexes from the displayed header rather than assuming a
+            # fixed column order. Some TIPP responses add/reorder columns.
+            header_cells = headers
+            def col_index(*needles, default=None):
+                for idx, heading in enumerate(header_cells):
+                    h = normalize_label(heading)
+                    if any(normalize_label(n) == h for n in needles):
+                        return idx
+                return default
+            code_idx = col_index("Tariff/Fee Code", "Tariff Fee Code", default=0)
+            desc_idx = col_index("Group Description", default=1)
+            activity_idx = col_index("Activity", default=2)
+            rate_idx = col_index("Rate", default=3)
             for row in table.find_all("tr")[1:]:
                 cells = [clean_text(c.get_text(" ", strip=True)) for c in row.find_all(["th", "td"])]
-                if len(cells) < 3:
+                if len(cells) < 4:
                     continue
-                duty = cells[0].lower()
-                rate = parse_rate(" ".join(cells))
+                def cell_at(idx):
+                    return cells[idx] if idx is not None and idx < len(cells) else ""
+                code = cell_at(code_idx)
+                description = cell_at(desc_idx)
+                activity = cell_at(activity_idx)
+                rate_text = cell_at(rate_idx)
+                rate = pct(rate_text)
+                label = " ".join(x for x in (code, description, activity) if x).strip()
+                label_norm = normalize_label(" ".join((code, description, activity)))
+                row_text = " | ".join(cells)
 
-                if duty == "cd" or "customs duty" in duty and "additional" not in duty:
+                # Every tariff row belongs in Additional Tariff Information,
+                # including standard rates, exemptions, concessions and dates.
+                non_core["tariff_rows"].append(row_text)
+                if len(cells) >= 7:
+                    validity.append(f"{code}: {cells[5]} to {cells[6]}")
+
+                # Use the tariff/fee code and descriptive columns, never the
+                # numeric row ID or unrelated numbers elsewhere in the row.
+                code_norm = normalize_label(code)
+                # Match only the statutory/base tariff rows for the six main
+                # inputs. Concession/FTA/exemption rows stay in the detail list.
+                is_base_row = not any(term in label_norm for term in (
+                    "fta", "exemption", "concession", "preferential", "reducedrate"
+                ))
+                if is_base_row and (code_norm in {"cd", "customsduty"} or label_norm.startswith("cdcustomsduty")):
                     rates["cd"] = rate
-                elif duty == "acd" or "additional customs duty" in duty:
+                elif is_base_row and (code_norm in {"acd", "additionalcustomsduty"} or label_norm.startswith("acd")):
                     rates["acd"] = rate
-                elif duty == "rd" or "regulatory duty" in duty:
+                elif is_base_row and (code_norm in {"rd", "regulatoryduty"} or label_norm.startswith("rd")):
                     rates["rd"] = rate
-                elif duty.startswith("st") or "sales tax" in duty and "additional" not in duty:
+                elif is_base_row and (code_norm in {"st", "salestax"} or label_norm.startswith("stsalestax")):
                     rates["st"] = rate
-                elif duty == "ast" or "additional sales tax" in duty:
+                elif is_base_row and (code_norm in {"ast", "additionalsalestax"} or label_norm.startswith("ast")):
                     rates["ast"] = rate
-                elif duty == "it" or "income tax" in duty:
+                elif is_base_row and (code_norm in {"it", "incometax"} or label_norm.startswith("itincometax")):
                     rates["it"] = rate
 
-                if len(cells) >= 7:
-                    validity.append(f"{cells[0]}: {cells[5]} to {cells[6]}")
+                if "pakchinafta(cd)" in label_norm or "pakchinafta" in label_norm and "customsduty" in label_norm:
+                    special_rates["pak_china_fta_cd"] = rate
+                    special_details["pak_china_fta_cd"] = row_text
+                if "incometaxexemptionunderfirstscheduleii" in label_norm or "incometaxpartioffirstschedule" in label_norm:
+                    special_rates["income_tax_exemption_first_schedule_ii"] = rate
+                    special_details["income_tax_exemption_first_schedule_ii"] = row_text
+
+        elif is_standard_tariff_table:
+            for row in table.find_all("tr")[1:]:
+                cells = [clean_text(c.get_text(" ", strip=True)) for c in row.find_all(["th", "td"])]
+                if len(cells) < 2:
+                    continue
+                duty = cells[0].lower()
+                rate = pct(cells[1])
+                if duty in ("cd", "customs duty"):
+                    rates["cd"] = rate
+                elif duty in ("acd", "additional customs duty"):
+                    rates["acd"] = rate
+                elif duty in ("rd", "regulatory duty"):
+                    rates["rd"] = rate
+                elif duty in ("st", "sales tax"):
+                    rates["st"] = rate
+                elif duty in ("ast", "additional sales tax"):
+                    rates["ast"] = rate
+                elif duty in ("it", "income tax"):
+                    rates["it"] = rate
+                non_core["tariff_rows"].append(" | ".join(cells))
 
         elif "province" in header_text and "description" in header_text and "cess" in header_text:
             for row in table.find_all("tr")[1:]:
@@ -791,22 +879,23 @@ def parse_tariff_page(html):
                 if cells:
                     non_core["provincial_cess"].append(" | ".join(cells))
 
-        elif "exemption/concession" in header_text or "exemption" in header_text or "concession" in header_text:
+        elif any(term in header_text for term in ("exemption/concession", "exemption", "concession")):
             for row in table.find_all("tr")[1:]:
                 cells = [clean_text(c.get_text(" ", strip=True)) for c in row.find_all(["th", "td"])]
-                if cells:
-                    row_text = " | ".join(cells)
-                    lower_row = row_text.lower()
-                    if "pak-china fta (cd)" in lower_row:
-                        special_rates["pak_china_fta_cd"] = parse_rate(row_text)
-                        special_details["pak_china_fta_cd"] = row_text
-                    if "income tax exemption under first scheduleii" in lower_row:
-                        special_rates["income_tax_exemption_first_schedule_ii"] = parse_rate(row_text)
-                        special_details["income_tax_exemption_first_schedule_ii"] = row_text
-                    if "concession" in lower_row:
-                        non_core["concessions"].append(row_text)
-                    else:
-                        non_core["exemptions"].append(row_text)
+                if not cells:
+                    continue
+                row_text = " | ".join(cells)
+                lower_row = row_text.lower()
+                if "pak-china fta (cd)" in lower_row:
+                    special_rates["pak_china_fta_cd"] = parse_rate(row_text)
+                    special_details["pak_china_fta_cd"] = row_text
+                if "income tax exemption under first scheduleii" in lower_row:
+                    special_rates["income_tax_exemption_first_schedule_ii"] = parse_rate(row_text)
+                    special_details["income_tax_exemption_first_schedule_ii"] = row_text
+                if "concession" in lower_row:
+                    non_core["concessions"].append(row_text)
+                else:
+                    non_core["exemptions"].append(row_text)
 
     for key in non_core:
         non_core[key] = list(dict.fromkeys(x for x in non_core[key] if x))
