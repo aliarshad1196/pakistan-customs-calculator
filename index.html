@@ -168,7 +168,7 @@ details[open] summary:after{content:"−"}
 <script>
 const rates={cd:0,acd:0,rd:0,st:0,ast:0,it:0};
 const tippRates={cd:0,acd:0,rd:0,st:0,ast:0,it:0};
-let specialRates={pak_china_fta_cd:null,income_tax_exemption_first_schedule_ii:null,income_tax_commercial:null,income_tax_industrial:null};
+let specialRates={pak_china_fta_cd:null,income_tax_exemption_first_schedule_ii:null};
 let astSource={rate:0.03,name:'Twelfth Schedule — 3% value-addition tax',note:'3% applies by default to taxable imports; statutory exclusions may depend on importer/use facts.',status:'default'};
 let gstMode=false;
 const money=n=>Number(n||0).toLocaleString('en-PK',{maximumFractionDigits:2});
@@ -196,13 +196,11 @@ async function fetchTariff(){
    const d=await readApiResponse(r);
    rates.cd=Number(d.rates.cd||0); rates.acd=Number(d.rates.acd||0);
    rates.rd=Number(d.rates.rd||0); rates.st=Number(d.rates.st||0);
-   rates.ast=Number(d.rates.ast||0); rates.it=(d.rates.it===null?0:Number(d.rates.it||0));
+   rates.ast=Number(d.rates.ast||0); rates.it=Number(d.rates.it||0);
    astSource=d.ast_source||astSource;
    Object.assign(tippRates,rates);
    specialRates.pak_china_fta_cd=d.special_rates?.pak_china_fta_cd ?? null;
    specialRates.income_tax_exemption_first_schedule_ii=d.special_rates?.income_tax_exemption_first_schedule_ii ?? null;
-   specialRates.income_tax_commercial=d.special_rates?.income_tax_commercial ?? null;
-   specialRates.income_tax_industrial=d.special_rates?.income_tax_industrial ?? null;
    document.getElementById('commodity').innerHTML='<p><b>'+ (d.code||hs) +'</b> — '+(d.description||'')+'</p>';
    document.getElementById('rates').innerHTML=
     [['CD','cd'],['ACD','acd'],['RD','rd'],['ST','st'],['AST','ast'],['IT','it']]
@@ -210,7 +208,7 @@ async function fetchTariff(){
       let extra='';
       if(x[1]==='cd') extra='<label class="rate-option"><input id="fta" type="checkbox" onchange="applyOptions()"> FTA</label>';
       if(x[1]==='ast') extra='<button class="ast-toggle" type="button" onclick="toggleAST()">AST ▾</button>';
-      if(x[1]==='it') extra='<label class="rate-option"><input id="incomeTaxIndustrial" type="checkbox" '+(specialRates.income_tax_industrial===null?'disabled':'')+' onchange="applyOptions()"> Industrial concern</label>';
+      if(x[1]==='it') extra='<label class="rate-option"><input id="incomeTaxCommercial" type="checkbox" checked onchange="applyOptions()"> Commercial</label>';
       return '<div class="rate"><div class="rate-head"><b>'+x[0]+' Rate (%)</b>'+extra+'</div><input id="rate_'+x[1]+'" type="number" inputmode="decimal" min="0" step="0.01" value="'+(Number(rates[x[1]])*100)+'" oninput="syncManualRate(\''+x[1]+'\')"></div>';
     }).join('');
    document.getElementById('options').style.display='block';
@@ -225,7 +223,7 @@ async function fetchTariff(){
    document.getElementById('nonCoreBody').innerHTML=groups.join('<hr>');
    document.getElementById('nonCore').style.display='block';
    document.getElementById('tippValidity').textContent=d.validity||'';
-   status.textContent = specialRates.income_tax_commercial===null ? 'WeBOC Commercial Income Tax rate could not be retrieved for this PCT. No generic 12% rate has been substituted.' : '';
+   status.textContent='';
    calc();
  }catch(e){status.textContent='Error: '+e.message}
  finally{if(btn){btn.disabled=false;btn.classList.remove('loading');btn.textContent='Fetch Duty Rates';}}
@@ -276,13 +274,11 @@ function applyOptions(){
  } else if(fta && !fta.disabled){
    setRateInput('cd',tippRates.cd);
  }
- const itBox=document.getElementById('incomeTaxIndustrial');
- if(itBox?.checked && specialRates.income_tax_industrial!==null){
-   setRateInput('it',specialRates.income_tax_industrial);
- } else if(specialRates.income_tax_commercial!==null){
-   setRateInput('it',specialRates.income_tax_commercial);
+ const itBox=document.getElementById('incomeTaxCommercial');
+ if(itBox && itBox.checked && specialRates.income_tax_exemption_first_schedule_ii!==null){
+   setRateInput('it',specialRates.income_tax_exemption_first_schedule_ii);
  } else {
-   setRateInput('it',0);
+   setRateInput('it',tippRates.it);
  }
  calc();
 }
@@ -344,8 +340,8 @@ let diffRightRates={...rates};
 let diffSameHsCode='';
 let diffLeftHsCode='';
 let diffRightHsCode='';
-let diffLeftSpecial={pak_china_fta_cd:null,income_tax_exemption_first_schedule_ii:null,income_tax_commercial:null,income_tax_industrial:null};
-let diffRightSpecial={pak_china_fta_cd:null,income_tax_exemption_first_schedule_ii:null,income_tax_commercial:null,income_tax_industrial:null};
+let diffLeftSpecial={pak_china_fta_cd:null,income_tax_exemption_first_schedule_ii:null};
+let diffRightSpecial={pak_china_fta_cd:null,income_tax_exemption_first_schedule_ii:null};
 function ratesForSide(prefix){
  // The Duty Difference Calculator always uses its own editable rate stores.
  // This is important for FTA/Commercial toggles: the displayed rate and the
@@ -388,7 +384,7 @@ async function fetchDifferenceLeftHS(){
    const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}));
    const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
    diffLeftRates={cd:Number(d.rates.cd||0),acd:Number(d.rates.acd||0),rd:Number(d.rates.rd||0),st:Number(d.rates.st||0),ast:Number(d.rates.ast||0),it:Number(d.rates.it||0)};
-   diffLeftSpecial={pak_china_fta_cd:d.special_rates?.pak_china_fta_cd ?? null,income_tax_exemption_first_schedule_ii:d.special_rates?.income_tax_exemption_first_schedule_ii ?? null,income_tax_commercial:d.special_rates?.income_tax_commercial ?? null,income_tax_industrial:d.special_rates?.income_tax_industrial ?? null};
+   diffLeftSpecial={pak_china_fta_cd:d.special_rates?.pak_china_fta_cd ?? null,income_tax_exemption_first_schedule_ii:d.special_rates?.income_tax_exemption_first_schedule_ii ?? null};
    diffLeftRates._tippCd=diffLeftRates.cd; diffLeftRates._tippIt=diffLeftRates.it; diffLeftHsCode=hs; renderDifferenceRates('l'); applyDifferenceOption('l','it');
    st.textContent='Loaded '+(d.code||hs)+' tariff rates for left side.'; calcDifference();
  }catch(e){st.textContent='Error: '+e.message;} finally{setFetchBusy('diffLeftFetch',false,'Fetch Left Duty Rates');}
@@ -400,9 +396,9 @@ async function fetchDifferenceSameHS(){
  try{
    const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}));
    const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
-   rates.cd=Number(d.rates.cd||0); rates.acd=Number(d.rates.acd||0); rates.rd=Number(d.rates.rd||0); rates.st=Number(d.rates.st||0); rates.ast=Number(d.rates.ast||0); rates.it=(d.rates.it===null?0:Number(d.rates.it||0));
+   rates.cd=Number(d.rates.cd||0); rates.acd=Number(d.rates.acd||0); rates.rd=Number(d.rates.rd||0); rates.st=Number(d.rates.st||0); rates.ast=Number(d.rates.ast||0); rates.it=Number(d.rates.it||0);
    Object.assign(tippRates,rates); diffLeftRates={...rates}; diffRightRates={...rates};
-   diffLeftSpecial={pak_china_fta_cd:d.special_rates?.pak_china_fta_cd ?? null,income_tax_exemption_first_schedule_ii:d.special_rates?.income_tax_exemption_first_schedule_ii ?? null,income_tax_commercial:d.special_rates?.income_tax_commercial ?? null,income_tax_industrial:d.special_rates?.income_tax_industrial ?? null};
+   diffLeftSpecial={pak_china_fta_cd:d.special_rates?.pak_china_fta_cd ?? null,income_tax_exemption_first_schedule_ii:d.special_rates?.income_tax_exemption_first_schedule_ii ?? null};
    diffRightSpecial={...diffLeftSpecial}; diffLeftRates._tippCd=diffLeftRates.cd; diffLeftRates._tippIt=diffLeftRates.it; diffRightRates._tippCd=diffRightRates.cd; diffRightRates._tippIt=diffRightRates.it; diffSameHsCode=hs;
    renderDifferenceRates('l'); renderDifferenceRates('r'); applyDifferenceOption('l','it'); applyDifferenceOption('r','it');
    st.textContent='Loaded '+(d.code||hs)+' tariff rates for both sides.'; calcDifference();
@@ -416,7 +412,7 @@ async function fetchDifferenceRightHS(){
    const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}));
    const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
    diffRightRates={cd:Number(d.rates.cd||0),acd:Number(d.rates.acd||0),rd:Number(d.rates.rd||0),st:Number(d.rates.st||0),ast:Number(d.rates.ast||0),it:Number(d.rates.it||0)};
-   diffRightSpecial={pak_china_fta_cd:d.special_rates?.pak_china_fta_cd ?? null,income_tax_exemption_first_schedule_ii:d.special_rates?.income_tax_exemption_first_schedule_ii ?? null,income_tax_commercial:d.special_rates?.income_tax_commercial ?? null,income_tax_industrial:d.special_rates?.income_tax_industrial ?? null};
+   diffRightSpecial={pak_china_fta_cd:d.special_rates?.pak_china_fta_cd ?? null,income_tax_exemption_first_schedule_ii:d.special_rates?.income_tax_exemption_first_schedule_ii ?? null};
    diffRightRates._tippCd=diffRightRates.cd; diffRightRates._tippIt=diffRightRates.it; diffRightHsCode=hs; renderDifferenceRates('r'); applyDifferenceOption('r','it');
    st.textContent='Loaded '+(d.code||hs)+' tariff rates for right side.'; calcDifference();
  }catch(e){st.textContent='Error: '+e.message;} finally{setFetchBusy('diffRightFetch',false,'Fetch Right Duty Rates');}
@@ -433,7 +429,7 @@ function renderDifferenceRates(prefix){
    let extra='';
    if(x[1]==='cd') extra='<label class="rate-option"><input id="'+prefix+'fta" type="checkbox" '+(sp.pak_china_fta_cd===null?'disabled':'')+' onchange="applyDifferenceOption(\''+prefix+'\',\'fta\')"> FTA</label>';
    if(x[1]==='ast') extra='<button class="ast-toggle" type="button" onclick="toggleDifferenceAST(\''+prefix+'\')">AST ▾</button>';
-   if(x[1]==='it') extra='<label class="rate-option"><input id="'+prefix+'incomeTaxIndustrial" type="checkbox" '+(sp.income_tax_industrial===null?'disabled':'')+' onchange="applyDifferenceOption(\''+prefix+'\',\'it\')"> Industrial concern</label>';
+   if(x[1]==='it') extra='<label class="rate-option"><input id="'+prefix+'incomeTaxCommercial" type="checkbox" checked '+(sp.income_tax_exemption_first_schedule_ii===null?'disabled':'')+' onchange="applyDifferenceOption(\''+prefix+'\',\'it\')"> Commercial</label>';
    return '<div class="rate"><div class="rate-head"><b>'+x[0]+' Rate (%)</b>'+extra+'</div><input id="'+prefix+'rate_'+x[1]+'" type="number" inputmode="decimal" min="0" step="0.01" value="'+(Number(rr[x[1]])*100)+'" oninput="syncDifferenceRate(\''+prefix+'\',\''+x[1]+'\')"></div>';
  }).join('');
 }
@@ -450,10 +446,9 @@ function applyDifferenceOption(prefix,key){
    const el=document.getElementById(prefix+'rate_cd'); if(el) el.value=(rr.cd*100).toString();
  }
  if(key==='it'){
-   const box=document.getElementById(prefix+'incomeTaxIndustrial');
-   if(box?.checked && sp.income_tax_industrial!==null) rr.it=Number(sp.income_tax_industrial);
-   else if(sp.income_tax_commercial!==null) rr.it=Number(sp.income_tax_commercial);
-   else rr.it=0;
+   const box=document.getElementById(prefix+'incomeTaxCommercial');
+   if(box?.checked && sp.income_tax_exemption_first_schedule_ii!==null) rr.it=Number(sp.income_tax_exemption_first_schedule_ii);
+   else if(box && !box.disabled) rr.it=rr._tippIt ?? rr.it;
    const el=document.getElementById(prefix+'rate_it'); if(el) el.value=(rr.it*100).toString();
  }
  calcDifference();

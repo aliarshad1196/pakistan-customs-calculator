@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify, send_from_directory, session, redirec
 import re
 import os
 import datetime
-from urllib.parse import quote_plus, urljoin
+from urllib.parse import quote_plus
 from pathlib import Path
 import requests
 import urllib3
@@ -87,308 +87,6 @@ def api_500(error):
     return error
 
 TIPP_BASE = "https://www.tipp.gov.pk/index.php"
-
-WEBOC_TARIFF_URL = "https://www.weboc.gov.pk/Shared/TariffList.aspx"
-# Cloudflare Worker proxy used because direct Render -> WeBOC requests can
-# hang or lose the ASP.NET cookieless session. Keep the proxy configurable so
-# the existing UI/password/deployment remains unchanged.
-WEBOC_PROXY_URL = os.environ.get(
-    "WEBOC_PROXY_URL",
-    "https://webo-proxy.aliarshad1196.workers.dev/weboc"
-).strip()
-# Be tolerant of an older Render environment variable that points only to
-# the Worker root. The tariff endpoint is /weboc; without this normalization
-# the Worker returns its health text (HTTP 200) instead of JSON tariff data.
-if WEBOC_PROXY_URL:
-    try:
-        from urllib.parse import urlsplit, urlunsplit
-        _u = urlsplit(WEBOC_PROXY_URL)
-        if _u.netloc and (_u.path in ("", "/")):
-            WEBOC_PROXY_URL = urlunsplit((_u.scheme, _u.netloc, "/weboc", _u.query, _u.fragment))
-    except Exception:
-        pass
-
-
-
-def _extract_category_rate(text, category):
-    """Extract the percentage associated with a specific WeBOC IT category.
-
-    WeBOC rows can contain several numbers (schedule/part/serial references)
-    before the actual rate.  Do not use the first percentage in the row.
-    """
-    t = clean_text(text)
-    low = t.lower()
-    if category == "commercial":
-        patterns = [
-            r"commercial\s+importer.{0,500}?@?\s*(\d+(?:\.\d+)?)\s*%",
-            r"commercial.{0,500}?import.{0,300}?@?\s*(\d+(?:\.\d+)?)\s*%",
-        ]
-    else:
-        patterns = [
-            r"industrial\s+undertaking.{0,500}?@?\s*(\d+(?:\.\d+)?)\s*%",
-            r"industrial\s+concern.{0,500}?@?\s*(\d+(?:\.\d+)?)\s*%",
-        ]
-    for pat in patterns:
-        m = re.search(pat, t, re.I)
-        if m:
-            return float(m.group(1)) / 100
-    return None
-
-
-def _parse_weboc_it_rates(html):
-    """Extract commercial/industrial import-stage IT rates from WeBOC Tariff & SROs."""
-    soup = BeautifulSoup(html or "", "html.parser")
-    out = {"commercial": None, "industrial": None,
-           "commercial_detail": None, "industrial_detail": None}
-
-    # The normal page has the two relevant rates in separate Exemptions / SROs
-    # table rows. Inspect every row containing Income Tax and a category phrase.
-    for tr in soup.find_all("tr"):
-        cells = [clean_text(c.get_text(" ", strip=True)) for c in tr.find_all(["th", "td"])]
-        if not cells:
-            continue
-        row = " | ".join(cells)
-        low = row.lower()
-        if "income tax" not in low:
-            continue
-        if "commercial importer" in low or ("commercial" in low and "import" in low):
-            rate = _extract_category_rate(row, "commercial")
-            if rate is not None:
-                out["commercial"] = rate
-                out["commercial_detail"] = row
-        if "industrial undertaking" in low or "industrial concern" in low:
-            rate = _extract_category_rate(row, "industrial")
-            if rate is not None:
-                out["industrial"] = rate
-                out["industrial_detail"] = row
-
-    # Some versions render the SRO section as divs/plain text rather than
-    # useful table rows. Split around Income Tax entries and inspect each
-    # category-specific block separately.
-    text = clean_text(soup.get_text(" ", strip=True))
-    for phrase, category in [
-        ("commercial importer", "commercial"),
-        ("industrial undertaking", "industrial"),
-        ("industrial concern", "industrial"),
-    ]:
-        if (category == "commercial" and out["commercial"] is not None) or (category == "industrial" and out["industrial"] is not None):
-            continue
-        pos = text.lower().find(phrase)
-        if pos >= 0:
-            chunk = text[max(0, pos-80):pos+700]
-            rate = _extract_category_rate(chunk, category)
-            if rate is not None:
-                out[category] = rate
-                out[category + "_detail"] = chunk
-
-    return out
-
-
-def _get_weboc_form(session, headers):
-    """Open a fresh WeBOC Tariff & SROs session and return its live form.
-
-    WeBOC uses ASP.NET cookieless sessions. The first GET may redirect to a
-    session-specific /Shared/TariffList.aspx URL. We keep the response that
-    created that session and submit its exact hidden fields/ViewState rather
-    than making a second GET that can create a different session.
-    """
-    try:
-        diag(stage="GET", requested_url=WEBOC_TARIFF_URL)
-        r = session.get(
-            WEBOC_TARIFF_URL,
-            timeout=(3, 8),
-            verify=False,
-            headers=headers,
-            allow_redirects=True,
-        )
-        if not r.ok:
-            return None, None, f"WeBOC returned HTTP {r.status_code}"
-        soup = BeautifulSoup(r.text, "html.parser")
-        form = soup.find("form", id="form1") or soup.find("form")
-        if not form:
-            return None, None, "WeBOC tariff form was not found"
-        return r.url, form, None
-    except requests.RequestException as exc:
-        return None, None, str(exc)
-
-
-def _weboc_search_once(hs8, diagnostics=None):
-    """Perform one completely fresh WeBOC Tariff & SROs search.
-
-    WeBOC uses ASP.NET ViewState and can issue a session-specific URL.  A
-    fresh Session is therefore created for every attempt and the exact
-    hidden fields from that GET are posted back to the same form action.
-    No tariff or income-tax percentages are embedded here.
-    """
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) "
-            "AppleWebKit/605.1.15 (KHTML, like Gecko) "
-            "Version/26.5.2 Mobile/15E148 Safari/604.1"
-        ),
-        "Referer": "https://www.weboc.gov.pk/",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Cache-Control": "no-cache",
-    }
-    session = requests.Session()
-    session.headers.update(headers)
-    def diag(**kwargs):
-        if diagnostics is not None:
-            diagnostics.update(kwargs)
-    try:
-        r = session.get(
-            WEBOC_TARIFF_URL,
-            timeout=(8, 20),
-            verify=False,
-            allow_redirects=True,
-        )
-        diag(get_status=r.status_code, get_url=r.url, get_content_length=len(r.text or ""))
-        if not r.ok:
-            diag(error_stage="GET")
-            return None, f"WeBOC GET returned HTTP {r.status_code} ({r.url})"
-
-        soup = BeautifulSoup(r.text, "html.parser")
-        form = soup.find("form", id="form1") or soup.find("form")
-        if not form:
-            diag(form_found=False, error_stage="FORM")
-            title = clean_text(soup.title.get_text(" ", strip=True)) if soup.title else ""
-            return None, f"WeBOC tariff form was not found (final URL: {r.url}; title: {title[:120]})"
-
-        diag(form_found=True, form_action=form.get("action") or r.url, input_count=len(form.find_all("input")))
-        data = {}
-        for inp in form.find_all("input"):
-            name = inp.get("name")
-            if not name:
-                continue
-            typ = (inp.get("type") or "text").lower()
-            if typ in {"hidden", "text", "search", "number"}:
-                data[name] = inp.get("value", "")
-
-        search_name = "TariffList$txtSearch"
-        if search_name not in data:
-            candidates = []
-            for inp in form.find_all("input"):
-                ident = ((inp.get("name") or "") + " " + (inp.get("id") or "")).lower()
-                typ = (inp.get("type") or "text").lower()
-                if typ in {"text", "search"} and any(k in ident for k in ("hscode", "pct", "hs_code", "search", "txtsearch")):
-                    candidates.append(inp.get("name") or inp.get("id"))
-            if candidates:
-                search_name = candidates[0]
-        if search_name not in data:
-            diag(error_stage="SEARCH_FIELD", search_field=None)
-            return None, "WeBOC HS search field was not found"
-
-        data[search_name] = hs8[:4] + "." + hs8[4:]
-        diag(search_field=search_name, search_value=data[search_name])
-        button = form.find("input", attrs={"name": "TariffList$btnSearch"})
-        if button:
-            data["TariffList$btnSearch"] = button.get("value", "Search")
-
-        action = urljoin(r.url, form.get("action") or r.url)
-        diag(stage="POST", post_url=action, hidden_fields=len(data))
-        post = session.post(
-            action,
-            data=data,
-            timeout=(8, 25),
-            verify=False,
-            headers={**headers, "Referer": r.url},
-            allow_redirects=True,
-        )
-        diag(post_status=post.status_code, post_url=post.url, post_content_length=len(post.text or ""))
-        if not post.ok:
-            diag(error_stage="POST")
-            return None, f"WeBOC POST returned HTTP {post.status_code} ({post.url})"
-
-        # Do not require one particular label before parsing.  WeBOC has
-        # changed whitespace/markup around these labels, while the actual
-        # Income Tax rows are what matter.
-        page_text = clean_text(BeautifulSoup(post.text, "html.parser").get_text(" ", strip=True))
-        diag(
-            final_page_chars=len(page_text),
-            has_income_tax="income tax" in page_text.lower(),
-            has_commercial_importer="commercial importer" in page_text.lower(),
-            has_industrial_undertaking="industrial undertaking" in page_text.lower(),
-            has_exemptions_sros="exemptions / sros" in page_text.lower(),
-        )
-        if len(page_text) < 100:
-            diag(error_stage="RESULT_PAGE")
-            return None, f"WeBOC returned an unexpectedly short page ({len(page_text)} chars; {post.url})"
-        return post.text, None
-    except requests.RequestException as exc:
-        diag(error_stage="REQUEST_EXCEPTION")
-        return None, f"WeBOC connection error: {exc}"
-    except Exception as exc:
-        diag(error_stage="EXCEPTION")
-        return None, f"WeBOC parser/request error: {exc}"
-
-
-def _weboc_search_form(_session, hs8):
-    """Try the live WeBOC tariff form twice, with independent sessions."""
-    errors = []
-    for attempt in range(2):
-        html, error = _weboc_search_once(hs8)
-        if html:
-            return html
-        errors.append(f"attempt {attempt + 1}: {error or 'unknown error'}")
-    return None, "; ".join(errors)
-
-def weboc_income_tax_rates(session, hs8):
-    """Fetch Commercial and Industrial Income Tax rates directly from WeBOC.
-
-    Render normally uses the Cloudflare Worker proxy first. The proxy handles
-    WeBOC's ASP.NET cookieless session and rotating /(S(...))/TariffList.aspx
-    URLs. There is deliberately NO hard-coded income-tax fallback.
-    """
-    hs8 = re.sub(r"[^0-9]", "", str(hs8))[:8]
-    result = {
-        "commercial": None, "industrial": None,
-        "commercial_detail": None, "industrial_detail": None,
-        "source": WEBOC_PROXY_URL or WEBOC_TARIFF_URL, "error": None
-    }
-    if len(hs8) != 8:
-        result["error"] = "Invalid HS code"
-        return result
-
-    # Preferred route: Cloudflare Worker. It keeps the live ASP.NET session
-    # outside Render and retries the POST when WeBOC rotates the session URL.
-    if WEBOC_PROXY_URL:
-        try:
-            proxy_url = WEBOC_PROXY_URL + ("&" if "?" in WEBOC_PROXY_URL else "?") + quote_plus("hs") + "=" + quote_plus(hs8[:4] + "." + hs8[4:])
-            r = session.get(
-                proxy_url,
-                timeout=(3, 8),
-                verify=False,
-                headers={
-                    "Accept": "application/json",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0 Safari/537.36",
-                },
-            )
-            if r.ok:
-                payload = r.json()
-                if payload.get("commercial") is not None:
-                    result["commercial"] = float(payload["commercial"]) / 100.0
-                    result["commercial_detail"] = payload.get("commercial_detail")
-                if payload.get("industrial") is not None:
-                    result["industrial"] = float(payload["industrial"]) / 100.0
-                    result["industrial_detail"] = payload.get("industrial_detail")
-                if result["commercial"] is not None or result["industrial"] is not None:
-                    if result["commercial"] is None:
-                        result["error"] = "WeBOC did not return a Commercial Importer income-tax rate for this PCT"
-                    elif result["industrial"] is None:
-                        result["error"] = "WeBOC did not return an Industrial Undertaking income-tax rate for this PCT"
-                    return result
-                result["error"] = payload.get("error") or "WeBOC proxy returned no importer-category income-tax rates"
-            else:
-                result["error"] = f"WeBOC proxy returned HTTP {r.status_code}"
-        except Exception as exc:
-            result["error"] = f"WeBOC proxy error: {exc}"
-
-    # Do NOT fall back to direct WeBOC from Render. Direct WeBOC connections can
-    # hang for minutes and kill the Gunicorn worker. The Cloudflare Worker is the
-    # only network path used for the live WeBOC lookup.
-    return result
-
 
 # Local CPFTA tariff-elimination schedule converted from the supplied
 # Pakistan-China FTA Excel schedule. Keeping the schedule local avoids
@@ -858,26 +556,10 @@ def search_tipp(session, tipp_code, prefix_code=None):
     # TIPP's own commodity search is tried with both the exact 12-digit code
     # and the 8-digit PCT. This is the key fix: an 8-digit PCT is allowed to
     # resolve to any matching 12-digit commodity record.
-    # TIPP accepts hierarchical HS searches. Some 12-digit TIPP commodity
-    # codes (e.g. 851612000000) are not resolvable when the full 12 digits
-    # are sent to the current search endpoint, while the 8-, 6-, or 4-digit
-    # parent code returns the commodity/detail link. Try the hierarchy from
-    # most-specific to broader levels; every discovered detail record is still
-    # validated against the requested PCT before acceptance.
     search_codes=[tipp_code]
-    if prefix_code:
-        prefix_digits=re.sub(r"[^0-9]", "", str(prefix_code))
-        for n in (8, 6, 4, 2):
-            if len(prefix_digits) >= n:
-                code=prefix_digits[:n]
-                if code and code not in search_codes:
-                    search_codes.append(code)
-    elif len(tipp_code) >= 8:
-        for n in (8, 6, 4, 2):
-            code=tipp_code[:n]
-            if code not in search_codes:
-                search_codes.append(code)
-    with ThreadPoolExecutor(max_workers=min(20, len(fields)*len(search_codes))) as pool:
+    if prefix_code and prefix_code != tipp_code:
+        search_codes.append(prefix_code)
+    with ThreadPoolExecutor(max_workers=min(12, len(fields)*len(search_codes))) as pool:
         futures=[]
         for code in search_codes:
             for field in fields:
@@ -890,15 +572,9 @@ def search_tipp(session, tipp_code, prefix_code=None):
             except Exception:
                 pass
 
-    # Older searchProduct endpoint as a fallback. Use the same hierarchical
-    # codes because some TIPP versions only expose the detail link when the
-    # parent HS heading is searched.
-    product_codes=search_codes[:5]
-    with ThreadPoolExecutor(max_workers=min(20, len(fields)*len(product_codes))) as pool:
-        futures=[]
-        for code in product_codes:
-            for field in fields:
-                futures.append(pool.submit(_tipp_search_one, session, field, code))
+    # Older searchProduct endpoint as a fallback.
+    with ThreadPoolExecutor(max_workers=len(fields)) as pool:
+        futures=[pool.submit(_tipp_search_one, session, f, tipp_code) for f in fields]
         for f in as_completed(futures):
             try:
                 for rid in f.result():
@@ -906,6 +582,17 @@ def search_tipp(session, tipp_code, prefix_code=None):
                         candidate_ids.append(str(rid))
             except Exception:
                 pass
+
+    if prefix_code and prefix_code != tipp_code:
+        with ThreadPoolExecutor(max_workers=len(fields)) as pool:
+            futures=[pool.submit(_tipp_search_one, session, f, prefix_code) for f in fields]
+            for f in as_completed(futures):
+                try:
+                    for rid in f.result():
+                        if rid and str(rid) not in candidate_ids:
+                            candidate_ids.append(str(rid))
+                except Exception:
+                    pass
 
     # Verify a bounded number of candidates. For an 8-digit PCT, any verified
     # TIPP commodity beginning with that PCT is acceptable.
@@ -1039,8 +726,8 @@ def parse_tariff_page(html):
 
     rates = {"cd": 0.0, "acd": 0.0, "rd": 0.0, "st": 0.0, "ast": 0.0, "it": 0.0}
     non_core = {"concessions": [], "exemptions": [], "provincial_cess": []}
-    special_rates = {"pak_china_fta_cd": None, "income_tax_exemption_first_schedule_ii": None, "income_tax_commercial": None, "income_tax_industrial": None}
-    special_details = {"pak_china_fta_cd": None, "income_tax_exemption_first_schedule_ii": None, "income_tax_commercial": None, "income_tax_industrial": None}
+    special_rates = {"pak_china_fta_cd": None, "income_tax_exemption_first_schedule_ii": None}
+    special_details = {"pak_china_fta_cd": None, "income_tax_exemption_first_schedule_ii": None}
     validity = []
 
     tables = soup.find_all("table")
@@ -1265,21 +952,6 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
         # The local schedule is the source of truth for the FTA checkbox.
         special_rates["pak_china_fta_cd"] = None
         special_details["pak_china_fta_cd"] = f"CPFTA local schedule lookup warning: {cpfta_error}"
-    # WeBOC Tariff & SROs is the source for the importer-category income-tax
-    # rates. The main WeBOC tariff table may show 12%, but the SRO section
-    # separately identifies the commercial and industrial rates.
-    weboc_it = weboc_income_tax_rates(session, hs8)
-    if weboc_it.get("commercial") is not None:
-        special_rates["income_tax_commercial"] = weboc_it["commercial"]
-        special_details["income_tax_commercial"] = weboc_it.get("commercial_detail")
-        # Commercial is the calculator default and is sourced only from WeBOC.
-        rates["it"] = weboc_it["commercial"]
-    if weboc_it.get("industrial") is not None:
-        special_rates["income_tax_industrial"] = weboc_it["industrial"]
-        special_details["income_tax_industrial"] = weboc_it.get("industrial_detail")
-    if weboc_it.get("error"):
-        special_details["income_tax_weboc_error"] = weboc_it["error"]
-
     # TIPP often does not expose the import-stage minimum value-addition tax
     # (shown by WeBOC as Additional Sales Tax / AST). The Twelfth Schedule to
     # the Sales Tax Act, 1990 provides a 3% ad-valorem rate, subject to its
@@ -1288,10 +960,8 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
     ast_rate = ast_rule["rate"]
     rates["ast"] = ast_rate
     it_rule = apply_atl_adjustment(income_tax_rule(hs8, importer_type=importer_type, schedule_part=schedule_part, atl=atl, facts=facts), atl=atl)
-    # Do not substitute TIPP's generic/base IT or an internal rule-layer rate.
-    # Commercial IT must come from the live WeBOC Tariff & SROs result.
-    if special_rates.get("income_tax_commercial") is None:
-        rates["it"] = None
+    if it_rule.get("rate") is not None:
+        rates["it"] = it_rule["rate"]
     description = extract_commodity_info(soup, tipp_code)
 
     return {
@@ -1310,7 +980,6 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
         "special_rates": special_rates,
         "income_tax_rule": it_rule,
         "special_details": special_details,
-        "weboc_income_tax": weboc_it,
         "validity": "; ".join(validity),
         "source_url": commodity_url,
         "resolution": resolution,
@@ -1359,25 +1028,6 @@ def income_tax_only():
 @app.route("/health")
 def health():
     return jsonify({"ok": True})
-
-
-@app.route("/api/weboc-debug")
-def weboc_debug():
-    """Diagnostic-only live WeBOC session test. No rates are hard-coded."""
-    raw_hs = request.args.get("hs", "9503.0090")
-    hs8 = re.sub(r"[^0-9]", "", raw_hs)[:8]
-    if len(hs8) != 8:
-        return jsonify({"ok": False, "error": "Enter an 8-digit PCT, e.g. 9503.0090"}), 400
-    diagnostics = {"hs8": hs8, "requested_hs": raw_hs}
-    html, error = _weboc_search_once(hs8, diagnostics=diagnostics)
-    diagnostics["ok"] = bool(html)
-    diagnostics["error"] = error
-    if html:
-        parsed = _parse_weboc_it_rates(html)
-        diagnostics["parsed_income_tax"] = parsed
-    else:
-        diagnostics["parsed_income_tax"] = {"commercial": None, "industrial": None}
-    return jsonify(diagnostics)
 
 
 @app.route("/api/tariff")
