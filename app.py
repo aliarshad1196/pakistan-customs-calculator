@@ -473,7 +473,11 @@ def _tipp_search_one(session, field, tipp_code):
 def _validate_tipp_id(session, rid, tipp_code, prefix_code=None):
     # TIPP sometimes changes the default sort/query on its detail page.
     # Try a few equivalent detail URLs before rejecting a valid record.
+    # TIPP's publicly indexed canonical detail URLs use valid_to.desc. Keep
+    # that exact route first: some TIPP deployments return a different/default
+    # page for the same record when the sort parameter is omitted.
     urls = [
+        f"{TIPP_BASE}?id={quote_plus(str(rid))}&r=tradeInfo%2Fview&sort=valid_to.desc",
         f"{TIPP_BASE}?id={quote_plus(str(rid))}&r=tradeInfo%2Fview",
         f"{TIPP_BASE}?id={quote_plus(str(rid))}&r=tradeInfo%2Fview&sort=rate",
         f"{TIPP_BASE}?id={quote_plus(str(rid))}&r=tradeInfo%2Fview&sort=valid_from",
@@ -482,7 +486,7 @@ def _validate_tipp_id(session, rid, tipp_code, prefix_code=None):
     headers={"User-Agent":"Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1"}
     for detail_url in urls:
         try:
-            detail = session.get(detail_url, timeout=7, verify=False, headers=headers, allow_redirects=True)
+            detail = session.get(detail_url, timeout=(4, 10), verify=False, headers=headers, allow_redirects=True)
             if not detail.ok:
                 continue
             if page_has_code(detail.text, tipp_code, prefix_code=prefix_code):
