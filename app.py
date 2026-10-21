@@ -1095,13 +1095,20 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
     resolution = "direct-commodity-url"
     if not tariff_table_found or response_path != expected_path:
         candidate_ids = []
-        for search_code in (tipp_code, hs8):
+        # Search the 8-digit parent branch first. TIPP can list several
+        # 12-digit children beneath one PCT; when the requested 12-digit
+        # extension is only a constructed placeholder, the first valid child
+        # is used because the parent PCT shares that tariff structure.
+        search_codes = (hs8, tipp_code)
+        for search_code in search_codes:
+            batch_ids = []
             for field in ("TradeInfo[hscode]", "TradeInfo[hsCode]", "TradeInfo[code]",
                           "TradeInfo[commodity_code]", "hscode", "hsCode", "code"):
                 for rid in _tradeinfo_index_one(session, field, search_code):
-                    if rid not in candidate_ids:
-                        candidate_ids.append(rid)
-            if candidate_ids:
+                    if rid not in batch_ids and rid not in candidate_ids:
+                        batch_ids.append(rid)
+            candidate_ids.extend(batch_ids)
+            if batch_ids:
                 break
 
         resolved_response = None
