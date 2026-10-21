@@ -1094,6 +1094,43 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
     record_id = f"direct:{tipp_code}"
     resolution = "direct-commodity-url"
     if not tariff_table_found or response_path != expected_path:
+        # Retry the known TIPP child-code suffixes in order for this 8-digit PCT.
+        # Example: 39269099 -> 392690990000, 392690991000, 392690991100,
+        # 392690991900, 392690999000. Apply this pattern to every searched PCT.
+        suffixes = ("0000", "1000", "1100", "1900", "9000")
+        for suffix in suffixes:
+            candidate_code = hs8 + suffix
+            candidate_url = f"https://www.tipp.gov.pk/site/commodity/{candidate_code}"
+            try:
+                candidate_response = session.get(
+                    candidate_url, timeout=(4, 12), verify=False,
+                    allow_redirects=True,
+                    headers={
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                        "Cache-Control": "no-cache",
+                    },
+                )
+                if not candidate_response.ok or not has_tariff_table(candidate_response.text):
+                    continue
+                candidate_path = requests.utils.urlparse(candidate_response.url).path.rstrip("/")
+                candidate_expected = f"/site/commodity/{candidate_code}".rstrip("/")
+                if candidate_path != candidate_expected and not page_has_code(
+                    candidate_response.text, candidate_code, prefix_code=hs8
+                ):
+                    continue
+                response = candidate_response
+                tipp_code = candidate_code
+                commodity_url = candidate_url
+                response_path = candidate_path
+                expected_path = candidate_expected
+                tariff_table_found = True
+                record_id = f"direct:{candidate_code}"
+                resolution = f"direct-child-suffix-{suffix}"
+                break
+            except requests.RequestException:
+                continue
+
+    if not tariff_table_found or response_path != expected_path:
         candidate_ids = []
         # Search the 8-digit parent branch first. TIPP can list several
         # 12-digit children beneath one PCT; when the requested 12-digit
