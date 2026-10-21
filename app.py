@@ -937,15 +937,38 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
         "Accept-Language": "en-US,en;q=0.9",
     })
 
-    record_id, resolution = search_tipp(session, tipp_code, prefix_code=hs8)
-    commodity_url = f"{TIPP_BASE}?id={quote_plus(str(record_id))}&r=tradeInfo%2Fview&sort=rate"
+    # Primary lookup: TIPP's public canonical commodity URL. A dotted 8-digit
+    # PCT (9503.0090) is normalized to 95030090 by normalize_hs(), then to the
+    # 12-digit commodity candidate 950300900000. This avoids expensive ID
+    # discovery and external search-engine fallbacks.
+    commodity_url = f"https://www.tipp.gov.pk/site/commodity/{tipp_code}"
+    response = None
+    direct_error = None
+    try:
+        direct = session.get(
+            commodity_url,
+            timeout=(3.5, 7),
+            verify=False,
+            allow_redirects=True,
+            headers={"Accept": "text/html,application/xhtml+xml", "Cache-Control": "no-cache"},
+        )
+        direct.raise_for_status()
+        if page_has_code(direct.text, tipp_code, prefix_code=hs8):
+            response = direct
+            record_id = f"direct:{tipp_code}"
+            resolution = "direct-commodity-url"
+        else:
+            direct_error = "The direct commodity page did not contain a verifiable matching PCT/commodity code."
+    except requests.RequestException as exc:
+        direct_error = f"Direct TIPP commodity request failed: {exc.__class__.__name__}."
 
-    response = session.get(commodity_url, timeout=30, verify=False)
-    response.raise_for_status()
-
-    if not page_has_code(response.text, tipp_code, prefix_code=hs8):
+    # Deliberately do not launch the old many-request resolver on a direct
+    # endpoint failure: it caused long waits and ended with the same error.
+    # The failure is explicit so we can diagnose the direct page response.
+    if response is None:
         raise RuntimeError(
-            f"TIPP record {record_id} did not return the requested code {tipp_code}."
+            f"TIPP direct lookup failed for {tipp_code} (PCT {hs8}). {direct_error or 'No verifiable response.'} "
+            f"Requested URL: {commodity_url}"
         )
 
     soup = BeautifulSoup(response.text, "html.parser")
