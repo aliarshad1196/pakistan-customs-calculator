@@ -827,22 +827,29 @@ def parse_tariff_page(html):
                 # Use the tariff/fee code and descriptive columns, never the
                 # numeric row ID or unrelated numbers elsewhere in the row.
                 code_norm = normalize_label(code)
-                # Match only the statutory/base tariff rows for the six main
-                # inputs. Concession/FTA/exemption rows stay in the detail list.
+                desc_norm = normalize_label(description)
+                activity_norm = normalize_label(activity)
+                # Match only statutory/base rows. TIPP's Group Description is
+                # not fully consistent across tariff codes, so recognize the
+                # tariff code OR an unambiguous description. Keep concessions,
+                # FTA rows, and exemptions in Additional Tariff Information.
                 is_base_row = not any(term in label_norm for term in (
                     "fta", "exemption", "concession", "preferential", "reducedrate"
                 ))
-                if is_base_row and (code_norm in {"cd", "customsduty"} or label_norm.startswith("cdcustomsduty")):
+                # Some TIPP rows label the main Sales Tax simply as "ST" in
+                # Tariff/Fee Code and "Sales Tax" in Group Description; others
+                # put the full label in one field. Do not confuse it with AST.
+                if is_base_row and (code_norm in {"cd", "customsduty"} or desc_norm in {"cd", "customsduty"} or "customsduty" in desc_norm):
                     rates["cd"] = rate
-                elif is_base_row and (code_norm in {"acd", "additionalcustomsduty"} or label_norm.startswith("acd")):
+                elif is_base_row and (code_norm in {"acd", "additionalcustomsduty"} or desc_norm in {"acd", "additionalcustomsduty"} or "additionalcustomsduty" in desc_norm):
                     rates["acd"] = rate
-                elif is_base_row and (code_norm in {"rd", "regulatoryduty"} or label_norm.startswith("rd")):
+                elif is_base_row and (code_norm in {"rd", "regulatoryduty"} or desc_norm in {"rd", "regulatoryduty"} or "regulatoryduty" in desc_norm):
                     rates["rd"] = rate
-                elif is_base_row and (code_norm in {"st", "salestax"} or label_norm.startswith("stsalestax")):
+                elif is_base_row and (code_norm in {"st", "salestax"} or desc_norm in {"st", "salestax"} or ("salestax" in desc_norm and "additionalsalestax" not in desc_norm) or label_norm.startswith("stsalestax")):
                     rates["st"] = rate
-                elif is_base_row and (code_norm in {"ast", "additionalsalestax"} or label_norm.startswith("ast")):
+                elif is_base_row and (code_norm in {"ast", "additionalsalestax"} or desc_norm in {"ast", "additionalsalestax"} or "additionalsalestax" in desc_norm):
                     rates["ast"] = rate
-                elif is_base_row and (code_norm in {"it", "incometax"} or label_norm.startswith("itincometax")):
+                elif is_base_row and (code_norm in {"it", "incometax"} or desc_norm in {"it", "incometax"} or "incometax" in desc_norm):
                     rates["it"] = rate
 
                 if "pakchinafta(cd)" in label_norm or "pakchinafta" in label_norm and "customsduty" in label_norm:
