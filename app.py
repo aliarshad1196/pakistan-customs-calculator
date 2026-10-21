@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory, send_file, session, redirect, url_for
+from flask import Flask, request, jsonify, send_from_directory, session, redirect, url_for
 import re
 import os
 import datetime
@@ -203,13 +203,27 @@ def page_has_code(html, tipp_code, prefix_code=None):
     """
     text = BeautifulSoup(html, "html.parser").get_text(" ")
     page_digits = re.sub(r"[^0-9]", "", text)
-    compact = re.sub(r"[^0-9]", "", tipp_code)
-    if compact in page_digits:
+    compact = re.sub(r"[^0-9]", "", str(tipp_code))
+    if compact and compact in page_digits:
         return True
-    if prefix_code:
-        prefix = re.sub(r"[^0-9]", "", prefix_code)
-        # Look for a 12-digit TIPP code beginning with the requested PCT.
-        return re.search(r"(?<!\d)" + re.escape(prefix) + r"\d{4}(?!\d)", text) is not None
+
+    # TIPP's 12-digit PSW-ITT commodity extensions are not consistently
+    # repeated on the tariff detail page: the detail page often identifies
+    # the parent 8-digit PCT only, because rates are published at PCT level.
+    # Accept that parent only when it appears as a standalone 8-digit code
+    # (optionally dotted/spaced), never as an arbitrary substring of a number.
+    prefix = re.sub(r"[^0-9]", "", str(prefix_code or compact[:8]))
+    if len(compact) == 12 and len(prefix) == 8:
+        code_pattern = r"(?<!\d)" + r"[.\s\-/]*".join(map(re.escape, prefix)) + r"(?!\d)"
+        if re.search(code_pattern, text):
+            return True
+
+    # For 8-digit PCT input, allow TIPP to expose a matching 12-digit
+    # extension on the tariff page.
+    if len(compact) == 8:
+        code_pattern = r"(?<!\d)" + r"[.\s\-/]*".join(map(re.escape, compact)) + r"\d{4}(?!\d)"
+        if re.search(code_pattern, text):
+            return True
     return False
 
 
@@ -922,7 +936,7 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
     record_id, resolution = search_tipp(session, tipp_code, prefix_code=hs8)
     commodity_url = f"{TIPP_BASE}?id={quote_plus(str(record_id))}&r=tradeInfo%2Fview&sort=rate"
 
-    response = session.get(commodity_url, timeout=(4, 8), verify=False)
+    response = session.get(commodity_url, timeout=30, verify=False)
     response.raise_for_status()
 
     if not page_has_code(response.text, tipp_code, prefix_code=hs8):
@@ -988,9 +1002,7 @@ def lookup(hs, facts=None, importer_type="auto", schedule_part="auto", atl=True)
 
 @app.route("/")
 def home():
-    # Resolve the HTML relative to this file, not Gunicorn's working directory.
-    index_path = Path(__file__).resolve().parent / "index.html"
-    return send_file(index_path, mimetype="text/html")
+    return send_from_directory(".", "index.html")
 
 
 @app.route("/api/ast")
