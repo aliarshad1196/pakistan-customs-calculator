@@ -101,12 +101,12 @@ details[open] summary:after{content:"−"}
 <div class="card">
 <div class="section-head"><h2>Import Details</h2><span class="section-note">Enter shipment values</span></div>
 <div class="grid">
-<div><label>Quantity</label><input id="qty" type="number" inputmode="decimal" step="any" value="1" oninput="calc()"></div>
-<div><label>Unit Price</label><input id="price" type="number" inputmode="decimal" step="any" value="0" oninput="calc()"></div>
-<div><label>Exchange Rate</label><input id="fx" type="number" inputmode="decimal" step="any" value="280" oninput="calc()"></div>
-<div class="cif-option-slot"><label class="check-label"><input id="cifMode" type="checkbox" style="width:auto;margin-top:3px" onchange="toggleCIF()"> CIF Value (× 2.01)</label></div>
+<div><label>Quantity</label><input id="qty" type="number" inputmode="decimal" step="any" value="1" oninput="resetManualCV()"></div>
+<div><label>Unit Price</label><input id="price" type="number" inputmode="decimal" step="any" value="0" oninput="resetManualCV()"></div>
+<div><label>Exchange Rate</label><input id="fx" type="number" inputmode="decimal" step="any" value="280" oninput="resetManualCV()"></div>
+<div class="cif-option-slot"><label class="check-label"><input id="cifMode" type="checkbox" style="width:auto;margin-top:3px" onchange="toggleCIF()"> CIF Value (× 1.01 × 1.01)</label></div>
 </div>
-<button class="secondary" onclick="calc()">Calculate</button>
+<button class="secondary" onclick="resetManualCV()">Calculate</button>
 </div>
 
 <div class="card">
@@ -296,7 +296,7 @@ function calculateCustomsValue(){
  const q=Number(document.getElementById('qty')?.value||0);
  const p=Number(document.getElementById('price')?.value||0);
  const fx=Number(document.getElementById('fx')?.value||0);
- return q*p*fx*(document.getElementById('cifMode')?.checked ? 2.01 : 1);
+ return document.getElementById('cifMode')?.checked ? q*p*fx*1.01*1.01 : q*p*fx;
 }
 function toggleCIF(){
  // Switching the CIF option returns CV to automatic calculation, including the multiplier.
