@@ -30,6 +30,11 @@ button{width:100%;border:0;border-radius:12px;padding:14px 16px;font-size:15px;f
 button:hover{transform:translateY(-1px);box-shadow:0 10px 22px rgba(23,105,224,.24)}button.loading{opacity:.88;cursor:wait;transform:none!important}.spinner{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.38);border-top-color:#fff;border-radius:50%;vertical-align:-3px;margin-right:8px;animation:spin .75s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 button.secondary{background:#edf4ff;color:#1259c4;box-shadow:none;border:1px solid #d7e6fb}
 .status{font-size:12px;margin-top:9px;color:var(--muted);line-height:1.5}
+.progress-track{display:none;height:7px;width:100%;margin-top:10px;overflow:hidden;border-radius:999px;background:#e8eff8;border:1px solid #dce7f5}
+.progress-track.active{display:block}
+.progress-bar{height:100%;width:0%;border-radius:999px;background:linear-gradient(90deg,#1769e0,#49a0ff);transition:width .28s ease-out;box-shadow:0 0 8px rgba(23,105,224,.22)}
+.progress-caption{display:none;font-size:11px;color:#526277;margin-top:5px}
+.progress-caption.active{display:block}
 #commodity{margin-top:10px;padding:11px 12px;border-radius:12px;background:#f5f9ff;border:1px solid #e0ebfb;color:#31506f;font-size:13px}
 #commodity p{margin:0}
 .rates{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}
@@ -76,7 +81,9 @@ details[open] summary:after{content:"−"}
 <label>HS / PCT Code</label>
 <input id="hs" inputmode="decimal" placeholder="e.g. 9503.0090">
 <button id="fetchBtn" onclick="fetchTariff()">Fetch Duty Rates</button>
-<div id="status" class="status"></div>
+<div id="tariffProgress" class="progress-track" role="progressbar" aria-label="Fetching tariff rates" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="Fetching tariff rates"><div id="tariffProgressBar" class="progress-bar"></div></div>
+<div id="tariffProgressText" class="progress-caption" aria-live="polite">Connecting to TIPP and retrieving tariff details…</div>
+<div id="status" class="status" aria-live="polite"></div>
 <div id="commodity"></div>
 <div class="section-head" style="margin-top:18px;margin-bottom:0"><h2 style="font-size:15px">Duty & Tax Rates</h2></div>
 <div id="rates" class="rates"></div>
@@ -194,6 +201,19 @@ async function fetchTariff(){
  const btn=document.getElementById('fetchBtn');
  if(!hs){status.textContent='Enter an HS/PCT code.';return}
  if(btn){btn.disabled=true;btn.classList.add('loading');btn.innerHTML='<span class="spinner"></span>Fetching Duty Rates…';}
+ const progress=document.getElementById('tariffProgress');
+ const progressText=document.getElementById('tariffProgressText');
+ const progressBar=document.getElementById('tariffProgressBar');
+ let progressValue=0;
+ if(progressBar)progressBar.style.width='0%';
+ if(progress){progress.setAttribute('aria-valuenow','0');progress.classList.add('active');}
+ if(progressText)progressText.classList.add('active');
+ const progressTimer=setInterval(()=>{
+   // Simulated progress: the server does not expose incremental fetch progress.
+   progressValue=Math.min(90,progressValue+(progressValue<45?7:progressValue<70?3:1));
+   if(progressBar)progressBar.style.width=progressValue+'%';
+   if(progress)progress.setAttribute('aria-valuenow',String(progressValue));
+ },300);
  status.textContent='Fetching current duty rates…';
  try{
    const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}).toString());
@@ -232,7 +252,7 @@ async function fetchTariff(){
    status.textContent='';
    calc();
  }catch(e){status.textContent='Error: '+e.message}
- finally{if(btn){btn.disabled=false;btn.classList.remove('loading');btn.textContent='Fetch Duty Rates';}}
+ finally{clearInterval(progressTimer);if(progressBar)progressBar.style.width='100%';if(progress)progress.setAttribute('aria-valuenow','100');if(btn){btn.disabled=false;btn.classList.remove('loading');btn.textContent='Fetch Duty Rates';}if(progress)progress.classList.remove('active');if(progressText)progressText.classList.remove('active');}
 }
 function astFacts(){
  return {
