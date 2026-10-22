@@ -23,6 +23,9 @@ label{display:block;font-weight:750;font-size:12px;margin:12px 0 6px;color:#3440
 input{width:100%;padding:13px 14px;border:1px solid #d6dee8;border-radius:12px;font-size:16px;color:var(--text);background:#fff;outline:none;transition:.18s}
 input:focus{border-color:#6ea3ee;box-shadow:0 0 0 4px rgba(23,105,224,.10)}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.cif-option-slot{display:flex;align-items:center;align-self:center;min-height:48px;padding-top:0}
+.cif-option-slot .check-label{margin:0;white-space:nowrap}
+@media(max-width:560px){.cif-option-slot{min-height:42px}}
 button{width:100%;border:0;border-radius:12px;padding:14px 16px;font-size:15px;font-weight:800;cursor:pointer;background:linear-gradient(135deg,var(--blue),var(--blue2));color:#fff;margin-top:12px;box-shadow:0 8px 18px rgba(23,105,224,.20);transition:transform .15s,box-shadow .15s}
 button:hover{transform:translateY(-1px);box-shadow:0 10px 22px rgba(23,105,224,.24)}button.loading{opacity:.88;cursor:wait;transform:none!important}.spinner{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.38);border-top-color:#fff;border-radius:50%;vertical-align:-3px;margin-right:8px;animation:spin .75s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 button.secondary{background:#edf4ff;color:#1259c4;box-shadow:none;border:1px solid #d7e6fb}
@@ -100,13 +103,14 @@ details[open] summary:after{content:"−"}
 <div class="grid">
 <div><label>Quantity</label><input id="qty" type="number" inputmode="decimal" step="any" value="1" oninput="calc()"></div>
 <div><label>Unit Price</label><input id="price" type="number" inputmode="decimal" step="any" value="0" oninput="calc()"></div>
-<div><label>Exchange Rate</label><input id="fx" type="number" inputmode="decimal" step="any" value="280" oninput="calc()"><label class="check-label" style="margin-top:8px"><input id="cifMode" type="checkbox" style="width:auto;margin-top:3px" onchange="toggleCIF()"> CIF Value (× 2.01)</label></div>
+<div><label>Exchange Rate</label><input id="fx" type="number" inputmode="decimal" step="any" value="280" oninput="calc()"></div>
+<div class="cif-option-slot"><label class="check-label"><input id="cifMode" type="checkbox" style="width:auto;margin-top:3px" onchange="toggleCIF()"> CIF Value (× 2.01)</label></div>
 </div>
 <button class="secondary" onclick="calc()">Calculate</button>
 </div>
 
 <div class="card">
-<div class="section-head"><h2>Duty & Tax Breakdown</h2><button id="gstToggle" class="gst-toggle" type="button" onclick="toggleGST()">Use GST</button></div>
+<div class="section-head"><h2>Duty & Tax Breakdown</h2><button id="gstToggle" class="gst-toggle" type="button" onclick="toggleGST()">Apply GST</button></div>
 <div id="breakdown"><small>Enter values and fetch tariff rates.</small></div>
 </div>
 </div>
