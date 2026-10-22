@@ -81,9 +81,9 @@ details[open] summary:after{content:"−"}
 <label>HS / PCT Code</label>
 <input id="hs" inputmode="decimal" placeholder="e.g. 9503.0090">
 <button id="fetchBtn" onclick="fetchTariff()">Fetch Duty Rates</button>
+<div id="status" class="status" aria-live="polite"></div>
 <div id="tariffProgress" class="progress-track" role="progressbar" aria-label="Fetching tariff rates" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="Fetching tariff rates"><div id="tariffProgressBar" class="progress-bar"></div></div>
 <div id="tariffProgressText" class="progress-caption" aria-live="polite">Connecting to TIPP and retrieving tariff details…</div>
-<div id="status" class="status" aria-live="polite"></div>
 <div id="commodity"></div>
 <div class="section-head" style="margin-top:18px;margin-bottom:0"><h2 style="font-size:15px">Duty & Tax Rates</h2></div>
 <div id="rates" class="rates"></div>
