@@ -100,7 +100,7 @@ details[open] summary:after{content:"−"}
 <div class="grid">
 <div><label>Quantity</label><input id="qty" type="number" inputmode="decimal" step="any" value="1" oninput="calc()"></div>
 <div><label>Unit Price</label><input id="price" type="number" inputmode="decimal" step="any" value="0" oninput="calc()"></div>
-<div><label>Exchange Rate</label><input id="fx" type="number" inputmode="decimal" step="any" value="280" oninput="calc()"></div>
+<div><label>Exchange Rate</label><input id="fx" type="number" inputmode="decimal" step="any" value="280" oninput="calc()"><label class="check-label" style="margin-top:8px"><input id="cifMode" type="checkbox" style="width:auto;margin-top:3px" onchange="toggleCIF()"> CIF Value (× 2.01)</label></div>
 </div>
 <button class="secondary" onclick="calc()">Calculate</button>
 </div>
@@ -288,6 +288,16 @@ function toggleAST(){
  const d=document.getElementById('astDetails');
  if(d) d.open=!d.open;
 }
+function calculateCustomsValue(){
+ const q=Number(document.getElementById('qty')?.value||0);
+ const p=Number(document.getElementById('price')?.value||0);
+ const fx=Number(document.getElementById('fx')?.value||0);
+ return q*p*fx*(document.getElementById('cifMode')?.checked ? 2.01 : 1);
+}
+function toggleCIF(){
+ // Switching the CIF option returns CV to automatic calculation, including the multiplier.
+ resetManualCV();
+}
 let manualCVActive=false;
 let manualCVValue=0;
 let manualCVText='';
@@ -301,7 +311,7 @@ function setManualCV(value){
  updateBreakdownInPlace();
 }
 function updateBreakdownInPlace(){
- const cv=manualCVActive ? manualCVValue : (Number(document.getElementById('qty')?.value||0)*Number(document.getElementById('price')?.value||0)*Number(document.getElementById('fx')?.value||0));
+ const cv=manualCVActive ? manualCVValue : calculateCustomsValue();
  const cd=cv*rates.cd, acd=cv*rates.acd, rd=cv*rates.rd;
  const st=(cv+cd+acd+rd)*rates.st;
  const ast=gstMode?0:(cv+cd+acd+rd)*rates.ast;
@@ -477,7 +487,7 @@ function calc(){
  const q=Number(document.getElementById('qty').value||0);
  const p=Number(document.getElementById('price').value||0);
  const fx=Number(document.getElementById('fx').value||0);
- const calculatedCv=q*p*fx;
+ const calculatedCv=calculateCustomsValue();
  const cv=manualCVActive ? manualCVValue : calculatedCv;
  const cd=cv*rates.cd, acd=cv*rates.acd, rd=cv*rates.rd;
  const effectiveIt=rates.it;
