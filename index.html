@@ -212,6 +212,21 @@ async function readApiResponse(response){
  if(!response.ok) throw new Error((data&&data.error)||('Request failed ('+response.status+')'));
  return data;
 }
+
+function initializeManualRateFields(){
+ const box=document.getElementById('rates');
+ if(box && !box.children.length){
+  box.innerHTML=[['CD','cd'],['ACD','acd'],['RD','rd'],['ST','st'],['AST','ast'],['IT','it']].map(x=>{
+   let extra='';
+   if(x[1]==='cd') extra='<label class="rate-option"><input id="fta" type="checkbox" onchange="applyOptions()"> FTA</label>';
+   if(x[1]==='ast') extra='<button class="ast-toggle" type="button" onclick="toggleAST()">AST ▾</button>';
+   if(x[1]==='it') extra='<label class="rate-option"><input id="incomeTaxCommercial" type="checkbox" checked onchange="applyOptions()"> Commercial</label>';
+   return '<div class="rate"><div class="rate-head"><b>'+x[0]+' Rate (%)</b>'+extra+'</div><input id="rate_'+x[1]+'" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncManualRate(\\''+x[1]+'\\')"></div>';
+  }).join('');
+ }
+ renderDifferenceRates('l');
+ renderDifferenceRates('r');
+}
 async function fetchTariff(){
  const hs=cleanHS(document.getElementById('hs').value);
  const status=document.getElementById('status');
@@ -553,6 +568,8 @@ function calc(){
  document.getElementById('breakdown').innerHTML=html;
  if(document.getElementById('differenceView').style.display!=='none') calcDifference();
 }
+
+document.addEventListener('DOMContentLoaded', initializeManualRateFields);
 </script>
 
 <div id="nonCore" style="margin-top:16px;display:none">
