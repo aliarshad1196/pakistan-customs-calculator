@@ -50,14 +50,6 @@ button.secondary{background:#edf4ff;color:#1259c4;box-shadow:none;border:1px sol
 details{border:1px solid var(--line)!important;border-radius:14px!important;padding:0!important;background:#fbfcfe!important;overflow:hidden}
 details summary{list-style:none;font-weight:800;cursor:pointer;padding:13px 14px;color:var(--navy);font-size:13px;display:flex;align-items:center;justify-content:space-between}
 details summary::-webkit-details-marker{display:none}
-.manual-rates-dropdown{margin-top:14px;border:1px solid var(--line);border-radius:14px;background:#fbfcfe;overflow:hidden}
-.manual-rates-dropdown summary{list-style:none;font-weight:800;cursor:pointer;padding:13px 14px;color:var(--navy);font-size:13px;display:flex;align-items:center;justify-content:space-between}
-.manual-rates-dropdown summary::-webkit-details-marker{display:none}
-.manual-rates-dropdown summary:after{content:"+";font-size:20px;line-height:1;color:#6c7b8f;font-weight:400}
-.manual-rates-dropdown[open] summary{border-bottom:1px solid var(--line);background:#f7faff}
-.manual-rates-dropdown[open] summary:after{content:"−"}
-.manual-rates-body{padding:0 12px 12px}
-.manual-rates-body .rates{margin-top:12px}
 details summary:after{content:"+";font-size:20px;line-height:1;color:#6c7b8f;font-weight:400}
 details[open] summary{border-bottom:1px solid var(--line);background:#f7faff}
 details[open] summary:after{content:"−"}
@@ -76,6 +68,14 @@ details[open] summary:after{content:"−"}
 @media(max-width:620px){.compare-grid{grid-template-columns:1fr}.tabs{flex-direction:column}.rates{grid-template-columns:1fr 1fr}.wrap{padding:14px 12px 34px}.hero h1{font-size:24px}.card{padding:17px}}
 @media(max-width:430px){.grid,.rates{grid-template-columns:1fr 1fr}.grid{gap:9px}.rates{gap:8px}.rate{padding:10px}.rate input{font-size:15px}.hero{padding:22px 18px}}
 @media(max-width:350px){.grid,.rates{grid-template-columns:1fr}}
+ 
+.manual-rates-dropdown{display:block;width:100%;margin:12px 0;border:1px solid var(--line);border-radius:12px;background:#fff;overflow:visible}
+.manual-rates-dropdown>summary{display:block;list-style:none;cursor:pointer;padding:12px 14px;user-select:none}
+.manual-rates-dropdown>summary::-webkit-details-marker{display:none}
+.manual-rates-dropdown>summary:after{content:"＋";float:right;font-size:17px}
+.manual-rates-dropdown[open]>summary:after{content:"−"}
+.manual-rates-body{display:block;padding:0 12px 12px}
+.manual-rates-body .rates{margin-top:12px}
 </style>
 </head>
 <body>
@@ -94,8 +94,8 @@ details[open] summary:after{content:"−"}
 <div id="tariffProgressText" class="progress-caption" aria-live="polite">Connecting to TIPP and retrieving tariff details…</div>
 <div id="commodity"></div>
 <div class="section-head" style="margin-top:18px;margin-bottom:0"><h2 style="font-size:15px">Duty & Tax Rates</h2></div>
-<details class="manual-rates-dropdown" id="mainRatesDetails">
-<summary>Duty rates (CD, ACD, RD, ST, AST, IT) — click to edit manually</summary>
+<details class="manual-rates-dropdown">
+<summary>Duty rates (CD, ACD, RD, ST, AST, IT) — expand to enter or edit rates</summary>
 <div class="manual-rates-body"><div id="rates" class="rates"></div></div>
 </details>
 <div id="options" class="options-card" style="display:none">
@@ -164,8 +164,8 @@ details[open] summary:after{content:"−"}
 <div class="compare-grid">
 <div class="compare-card">
 <h3>Left Side</h3>
-<details class="manual-rates-dropdown" id="leftRatesDetails">
-<summary>Duty rates — click to edit manually</summary>
+<details class="manual-rates-dropdown">
+<summary>Duty rates — expand to enter or edit rates</summary>
 <div class="manual-rates-body"><div id="leftRates" class="rates" style="margin-bottom:14px"><small>Fetch an HS/PCT code to load duty rates.</small></div></div>
 </details>
 <div class="grid">
@@ -177,8 +177,8 @@ details[open] summary:after{content:"−"}
 </div>
 <div class="compare-card">
 <h3>Right Side</h3>
-<details class="manual-rates-dropdown" id="rightRatesDetails">
-<summary>Duty rates — click to edit manually</summary>
+<details class="manual-rates-dropdown">
+<summary>Duty rates — expand to enter or edit rates</summary>
 <div class="manual-rates-body"><div id="rightRates" class="rates" style="margin-bottom:14px"><small>Fetch an HS/PCT code to load duty rates.</small></div></div>
 </details>
 <div class="grid">
