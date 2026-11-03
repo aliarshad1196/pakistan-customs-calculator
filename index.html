@@ -37,7 +37,7 @@ button.secondary{background:#edf4ff;color:#1259c4;box-shadow:none;border:1px sol
 .progress-caption.active{display:block}
 #commodity{margin-top:10px;padding:11px 12px;border-radius:12px;background:#f5f9ff;border:1px solid #e0ebfb;color:#31506f;font-size:13px}
 #commodity p{margin:0}
-.rates{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}
+.manual-rates{margin-top:8px;border:1px solid var(--line);border-radius:12px;padding:9px 11px;background:#fff}.manual-rates summary{font-weight:800;font-size:12px;color:#31506f;cursor:pointer;padding:3px}.manual-rates .rates{margin-top:8px}.rates{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}
 .rate{background:linear-gradient(180deg,#fbfdff,#f5f8fc);padding:11px;border-radius:14px;border:1px solid var(--line)}
 .rate b{display:block;font-size:11px;color:#526277;margin-bottom:6px;letter-spacing:.2px}.rate-head{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:6px}.rate-head b{margin:0}.rate-option{display:flex;align-items:center;gap:5px;font-size:10px;font-weight:800;color:#526277;white-space:nowrap;cursor:pointer}.rate-option input{width:15px;height:15px;padding:0;margin:0;accent-color:var(--blue);flex:0 0 auto}.ast-toggle{border:1px solid #d7e2ef;background:#fff;color:#31506f;border-radius:8px;padding:4px 7px;font-size:10px;font-weight:800;cursor:pointer;box-shadow:none;margin:0}.ast-toggle:hover{transform:none;box-shadow:none}.gst-toggle{width:auto;margin:0;padding:7px 11px;border-radius:9px;font-size:11px;box-shadow:none;background:#edf4ff;color:#1259c4;border:1px solid #d7e6fb}.gst-toggle.active{background:var(--green);color:#fff;border-color:var(--green)}
 .rate input{padding:10px 9px;font-size:16px;font-weight:800;background:#fff}
@@ -86,7 +86,9 @@ details[open] summary:after{content:"−"}
 <div id="tariffProgressText" class="progress-caption" aria-live="polite">Connecting to TIPP and retrieving tariff details…</div>
 <div id="commodity"></div>
 <div class="section-head" style="margin-top:18px;margin-bottom:0"><h2 style="font-size:15px">Duty & Tax Rates</h2></div>
-<div id="rates" class="rates"></div>
+<details class="manual-rates" open><summary>Duty rates — click to expand / collapse</summary>
+<div id="rates" class="rates"><div class="rate"><div class="rate-head"><b>CD Rate (%)</b></div><input id="rate_cd" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncManualRate('cd')"></div><div class="rate"><div class="rate-head"><b>ACD Rate (%)</b></div><input id="rate_acd" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncManualRate('acd')"></div><div class="rate"><div class="rate-head"><b>RD Rate (%)</b></div><input id="rate_rd" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncManualRate('rd')"></div><div class="rate"><div class="rate-head"><b>ST Rate (%)</b></div><input id="rate_st" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncManualRate('st')"></div><div class="rate"><div class="rate-head"><b>AST Rate (%)</b></div><input id="rate_ast" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncManualRate('ast')"></div><div class="rate"><div class="rate-head"><b>IT Rate (%)</b></div><input id="rate_it" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncManualRate('it')"></div></div>
+</details>
 <div id="options" class="options-card" style="display:none">
 <details id="astDetails">
 <summary>Twelfth Schedule / AST conditions</summary>
@@ -153,7 +155,7 @@ details[open] summary:after{content:"−"}
 <div class="compare-grid">
 <div class="compare-card">
 <h3>Left Side</h3>
-<div id="leftRates" class="rates" style="margin-bottom:14px"><small>Fetch an HS/PCT code to load duty rates.</small></div>
+<details class="manual-rates" open><summary>Left duty rates — click to expand / collapse</summary><details class="manual-rates" open><summary>Left duty rates — click to expand / collapse</summary><div id="leftRates" class="rates" style="margin-bottom:14px"><div class="rate"><div class="rate-head"><b>CD Rate (%)</b></div><input id="lrate_cd" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncDifferenceRate('l','cd')"></div><div class="rate"><div class="rate-head"><b>ACD Rate (%)</b></div><input id="lrate_acd" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncDifferenceRate('l','acd')"></div><div class="rate"><div class="rate-head"><b>RD Rate (%)</b></div><input id="lrate_rd" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncDifferenceRate('l','rd')"></div><div class="rate"><div class="rate-head"><b>ST Rate (%)</b></div><input id="lrate_st" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncDifferenceRate('l','st')"></div><div class="rate"><div class="rate-head"><b>AST Rate (%)</b></div><input id="lrate_ast" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncDifferenceRate('l','ast')"></div><div class="rate"><div class="rate-head"><b>IT Rate (%)</b></div><input id="lrate_it" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncDifferenceRate('l','it')"></div></div></details>
 <div class="grid">
 <div><label>Quantity</label><input id="lqty" type="number" inputmode="decimal" step="any" value="1" oninput="calcDifference()"></div>
 <div><label>Unit Price</label><input id="lprice" type="number" inputmode="decimal" step="any" value="0" oninput="calcDifference()"></div>
@@ -163,7 +165,7 @@ details[open] summary:after{content:"−"}
 </div>
 <div class="compare-card">
 <h3>Right Side</h3>
-<div id="rightRates" class="rates" style="margin-bottom:14px"><small>Fetch an HS/PCT code to load duty rates.</small></div>
+<details class="manual-rates" open><summary>Right duty rates — click to expand / collapse</summary><details class="manual-rates" open><summary>Right duty rates — click to expand / collapse</summary><div id="rightRates" class="rates" style="margin-bottom:14px"><div class="rate"><div class="rate-head"><b>CD Rate (%)</b></div><input id="rrate_cd" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncDifferenceRate('r','cd')"></div><div class="rate"><div class="rate-head"><b>ACD Rate (%)</b></div><input id="rrate_acd" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncDifferenceRate('r','acd')"></div><div class="rate"><div class="rate-head"><b>RD Rate (%)</b></div><input id="rrate_rd" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncDifferenceRate('r','rd')"></div><div class="rate"><div class="rate-head"><b>ST Rate (%)</b></div><input id="rrate_st" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncDifferenceRate('r','st')"></div><div class="rate"><div class="rate-head"><b>AST Rate (%)</b></div><input id="rrate_ast" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncDifferenceRate('r','ast')"></div><div class="rate"><div class="rate-head"><b>IT Rate (%)</b></div><input id="rrate_it" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncDifferenceRate('r','it')"></div></div></details>
 <div class="grid">
 <div><label>Quantity</label><input id="rqty" type="number" inputmode="decimal" step="any" value="1" oninput="calcDifference()"></div>
 <div><label>Unit Price</label><input id="rprice" type="number" inputmode="decimal" step="any" value="0" oninput="calcDifference()"></div>
