@@ -221,7 +221,7 @@ function initializeManualRateFields(){
    if(x[1]==='cd') extra='<label class="rate-option"><input id="fta" type="checkbox" onchange="applyOptions()"> FTA</label>';
    if(x[1]==='ast') extra='<button class="ast-toggle" type="button" onclick="toggleAST()">AST ▾</button>';
    if(x[1]==='it') extra='<label class="rate-option"><input id="incomeTaxCommercial" type="checkbox" checked onchange="applyOptions()"> Commercial</label>';
-   return '<div class="rate"><div class="rate-head"><b>'+x[0]+' Rate (%)</b>'+extra+'</div><input id="rate_'+x[1]+'" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncManualRate(\\''+x[1]+'\\')"></div>';
+   return `<div class="rate"><div class="rate-head"><b>${x[0]} Rate (%)</b>${extra}</div><input id="rate_${x[1]}" type="number" inputmode="decimal" min="0" step="0.01" value="0" oninput="syncManualRate('${x[1]}')"></div>`;
   }).join('');
  }
  renderDifferenceRates('l');
@@ -449,11 +449,11 @@ async function fetchDifferenceLeftHS(){
  const st=document.getElementById('diffLeftStatus'); if(!hs){st.textContent='Enter the left-side HS/PCT code.';return;}
  setFetchBusy('diffLeftFetch',true,'Fetch Left Duty Rates'); st.textContent='Fetching current duty rates…';
  try{
-   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}));
+   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,importer_type:'commercial',...astFacts()}));
    const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
    diffLeftRates={cd:Number(d.rates.cd||0),acd:Number(d.rates.acd||0),rd:Number(d.rates.rd||0),st:Number(d.rates.st||0),ast:Number(d.rates.ast||0),it:Number(d.rates.it||0)};
    diffLeftSpecial={pak_china_fta_cd:d.special_rates?.pak_china_fta_cd ?? null,income_tax_exemption_first_schedule_ii:d.special_rates?.income_tax_exemption_first_schedule_ii ?? null};
-   diffLeftRates._tippCd=diffLeftRates.cd; diffLeftRates._tippIt=diffLeftRates.it; diffLeftHsCode=hs; renderDifferenceRates('l'); applyDifferenceOption('l','it');
+   diffLeftRates._tippCd=diffLeftRates.cd; diffLeftRates._tippIt=diffLeftRates.it; diffLeftHsCode=hs; renderDifferenceRates('l');
    st.textContent='Loaded '+(d.code||hs)+' tariff rates for left side.'; calcDifference();
  }catch(e){st.textContent='Error: '+e.message;} finally{setFetchBusy('diffLeftFetch',false,'Fetch Left Duty Rates');}
 }
@@ -462,13 +462,13 @@ async function fetchDifferenceSameHS(){
  const st=document.getElementById('diffSameStatus'); if(!hs){st.textContent='Enter an HS/PCT code.';return;}
  setFetchBusy('diffSameFetch',true,'Fetch Duty Rates'); st.textContent='Fetching current duty rates…';
  try{
-   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}));
+   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,importer_type:'commercial',...astFacts()}));
    const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
    rates.cd=Number(d.rates.cd||0); rates.acd=Number(d.rates.acd||0); rates.rd=Number(d.rates.rd||0); rates.st=Number(d.rates.st||0); rates.ast=Number(d.rates.ast||0); rates.it=Number(d.rates.it||0);
    Object.assign(tippRates,rates); diffLeftRates={...rates}; diffRightRates={...rates};
    diffLeftSpecial={pak_china_fta_cd:d.special_rates?.pak_china_fta_cd ?? null,income_tax_exemption_first_schedule_ii:d.special_rates?.income_tax_exemption_first_schedule_ii ?? null};
    diffRightSpecial={...diffLeftSpecial}; diffLeftRates._tippCd=diffLeftRates.cd; diffLeftRates._tippIt=diffLeftRates.it; diffRightRates._tippCd=diffRightRates.cd; diffRightRates._tippIt=diffRightRates.it; diffSameHsCode=hs;
-   renderDifferenceRates('l'); renderDifferenceRates('r'); applyDifferenceOption('l','it'); applyDifferenceOption('r','it');
+   renderDifferenceRates('l'); renderDifferenceRates('r');
    st.textContent='Loaded '+(d.code||hs)+' tariff rates for both sides.'; calcDifference();
  }catch(e){st.textContent='Error: '+e.message;} finally{setFetchBusy('diffSameFetch',false,'Fetch Duty Rates');}
 }
@@ -477,11 +477,11 @@ async function fetchDifferenceRightHS(){
  const st=document.getElementById('diffRightStatus'); if(!hs){st.textContent='Enter the right-side HS/PCT code.';return;}
  setFetchBusy('diffRightFetch',true,'Fetch Right Duty Rates'); st.textContent='Fetching current duty rates…';
  try{
-   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,...astFacts()}));
+   const r=await fetch('/api/tariff?'+new URLSearchParams({hs,importer_type:'commercial',...astFacts()}));
    const d=await r.json(); if(!r.ok) throw new Error(d.error||'Lookup failed');
    diffRightRates={cd:Number(d.rates.cd||0),acd:Number(d.rates.acd||0),rd:Number(d.rates.rd||0),st:Number(d.rates.st||0),ast:Number(d.rates.ast||0),it:Number(d.rates.it||0)};
    diffRightSpecial={pak_china_fta_cd:d.special_rates?.pak_china_fta_cd ?? null,income_tax_exemption_first_schedule_ii:d.special_rates?.income_tax_exemption_first_schedule_ii ?? null};
-   diffRightRates._tippCd=diffRightRates.cd; diffRightRates._tippIt=diffRightRates.it; diffRightHsCode=hs; renderDifferenceRates('r'); applyDifferenceOption('r','it');
+   diffRightRates._tippCd=diffRightRates.cd; diffRightRates._tippIt=diffRightRates.it; diffRightHsCode=hs; renderDifferenceRates('r');
    st.textContent='Loaded '+(d.code||hs)+' tariff rates for right side.'; calcDifference();
  }catch(e){st.textContent='Error: '+e.message;} finally{setFetchBusy('diffRightFetch',false,'Fetch Right Duty Rates');}
 }
@@ -491,13 +491,12 @@ function renderDifferenceRates(prefix){
  const box=document.getElementById(prefix==='l'?'leftRates':'rightRates');
  if(!box) return;
  const rr=diffRateStore(prefix), sp=diffSpecialStore(prefix);
- const side=prefix==='l'?'Left':'Right';
  const fields=[['CD','cd'],['ACD','acd'],['RD','rd'],['ST','st'],['AST','ast'],['IT','it']];
  box.innerHTML=fields.map(x=>{
    let extra='';
-   if(x[1]==='cd') extra='<label class="rate-option"><input id="'+prefix+'fta" type="checkbox" '+(sp.pak_china_fta_cd===null?'disabled':'')+' onchange="applyDifferenceOption(\''+prefix+'\',\'fta\')"> FTA</label>';
+   if(x[1]==='cd') extra='<label class="rate-option"><input id="'+prefix+'fta" type="checkbox" onchange="applyDifferenceOption(\''+prefix+'\',\'fta\')"> FTA</label>';
    if(x[1]==='ast') extra='<button class="ast-toggle" type="button" onclick="toggleDifferenceAST(\''+prefix+'\')">AST ▾</button>';
-   if(x[1]==='it') extra='<label class="rate-option"><input id="'+prefix+'incomeTaxCommercial" type="checkbox" checked '+(sp.income_tax_exemption_first_schedule_ii===null?'disabled':'')+' onchange="applyDifferenceOption(\''+prefix+'\',\'it\')"> Commercial</label>';
+   if(x[1]==='it') extra='<label class="rate-option"><input id="'+prefix+'incomeTaxCommercial" type="checkbox" checked onchange="applyDifferenceOption(\''+prefix+'\',\'it\')"> Commercial</label>';
    return '<div class="rate"><div class="rate-head"><b>'+x[0]+' Rate (%)</b>'+extra+'</div><input id="'+prefix+'rate_'+x[1]+'" type="number" inputmode="decimal" min="0" step="0.01" value="'+(Number(rr[x[1]])*100)+'" oninput="syncDifferenceRate(\''+prefix+'\',\''+x[1]+'\')"></div>';
  }).join('');
 }
@@ -505,21 +504,57 @@ function syncDifferenceRate(prefix,key){
  const el=document.getElementById(prefix+'rate_'+key); if(!el)return;
  diffRateStore(prefix)[key]=Math.max(0,Number(el.value||0))/100; calcDifference();
 }
-function applyDifferenceOption(prefix,key){
+const differenceItRequestSeq={l:0,r:0};
+function getDifferenceHSForSide(prefix){
+ const sameMode=document.getElementById('sameHsMode')?.checked;
+ if(sameMode) return diffSameHsCode || cleanHS(document.getElementById('diffSameHs')?.value||'');
+ if(prefix==='l') return diffLeftHsCode || cleanHS(document.getElementById('diffLeftHs')?.value||'');
+ return diffRightHsCode || cleanHS(document.getElementById('diffRightHs')?.value||'');
+}
+async function applyDifferenceOption(prefix,key){
  const rr=diffRateStore(prefix), sp=diffSpecialStore(prefix);
  if(key==='fta'){
    const box=document.getElementById(prefix+'fta');
-   if(box?.checked && sp.pak_china_fta_cd!==null) rr.cd=Number(sp.pak_china_fta_cd);
-   else if(box && !box.disabled) rr.cd=rr._tippCd ?? rr.cd;
+   if(box?.checked && sp.pak_china_fta_cd!==null && sp.pak_china_fta_cd!==undefined){
+     rr.cd=Number(sp.pak_china_fta_cd);
+   } else if(box && !box.checked){
+     rr.cd=rr._tippCd ?? rr.cd;
+   }
    const el=document.getElementById(prefix+'rate_cd'); if(el) el.value=(rr.cd*100).toString();
+   calcDifference();
+   return;
  }
  if(key==='it'){
    const box=document.getElementById(prefix+'incomeTaxCommercial');
-   if(box?.checked && sp.income_tax_exemption_first_schedule_ii!==null) rr.it=Number(sp.income_tax_exemption_first_schedule_ii);
-   else if(box && !box.disabled) rr.it=rr._tippIt ?? rr.it;
-   const el=document.getElementById(prefix+'rate_it'); if(el) el.value=(rr.it*100).toString();
+   if(!box) return;
+   const hs=getDifferenceHSForSide(prefix);
+   // Without an HS lookup, retain the user's manually entered IT rate.
+   // The checkbox remains interactive and applies the selected importer type
+   // the next time tariff rates are fetched.
+   if(!hs){ calcDifference(); return; }
+   const seq=++differenceItRequestSeq[prefix];
+   const statusId=prefix==='l'?'diffLeftStatus':(document.getElementById('sameHsMode')?.checked?'diffSameStatus':'diffRightStatus');
+   const status=document.getElementById(statusId);
+   if(status) status.textContent='Updating income-tax rate…';
+   try{
+     const params=new URLSearchParams({hs,importer_type:box.checked?'commercial':'industrial',...astFacts()});
+     const response=await fetch('/api/tariff?'+params.toString());
+     const data=await response.json();
+     if(!response.ok) throw new Error(data.error||'Unable to update income-tax rate.');
+     if(seq!==differenceItRequestSeq[prefix]) return;
+     if(data.rates && data.rates.it!==undefined && data.rates.it!==null){
+       rr.it=Number(data.rates.it);
+       const input=document.getElementById(prefix+'rate_it');
+       if(input) input.value=(rr.it*100).toString();
+     }
+     if(status) status.textContent=(box.checked?'Commercial':'Industrial')+' income-tax rate updated.';
+     calcDifference();
+   }catch(error){
+     if(seq===differenceItRequestSeq[prefix] && status){
+       status.textContent='Income-tax rate could not be refreshed: '+error.message;
+     }
+   }
  }
- calcDifference();
 }
 function toggleDifferenceAST(prefix){
  const el=document.getElementById(prefix+'rate_ast');
